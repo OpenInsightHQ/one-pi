@@ -1,0 +1,15 @@
+# Example docker-compose for running the pi coding agent in HTTP API mode.
+# Build the image first: docker build -t pi-agent .
+services:
+  pi-agent:
+    build: .
+    image: pi-agent:latest
+    container_name: pi-agent
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      - ./pi-data:/home/codeuser/.pi
+      - ./skill-repo:/app/skill-repo
+    restart: unless-stopped

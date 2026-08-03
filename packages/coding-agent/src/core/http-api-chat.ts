@@ -1,0 +1,653 @@
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { join, resolve as resolvePath, sep } from "node:path";
+import { getSessionsDir } from "../config.js";
+import { AuthStorage } from "./auth-storage.js";
+import {
+	createDmpSpawnHook,
+	createHttpResourceLoader,
+	defaultHttpModel,
+	getBaseUrl,
+	getHttpSkillAgentTools,
+	getMimeType,
+	getOrCreateAgentOptionsMap,
+	getOrCreateAgentSessionMap,
+	getUserIdOrReject,
+	getUserRootDir,
+	getUserSessionDir,
+	httpModelConfig,
+	parseJsonBody,
+	sanitizeId,
+	sendError,
+	sendJson,
+	sendSSE,
+} from "./http-api-shared.js";
+import { type CreateAgentSessionOptions, createAgentSession } from "./sdk.js";
+import { findMostRecentSession, SessionManager } from "./session-manager.js";
+import { createLibreChatTools } from "./tools/document-generator.js";
+import { getCachedMCPTools } from "./tools/mcp-registry.js";
+
+export async function handlePrompt(req: IncomingMessage, res: ServerResponse): Promise<void> {
+	const userId = getUserIdOrReject(req, res);
+	if (!userId) return;
+
+	const body = await parseJsonBody<{
+		message: string;
+		agentId: string;
+		sessionId?: string;
+		cwd?: string;
+		stream?: boolean;
+		systemPrompt?: string;
+	}>(req);
+
+	if (!body || !body.message) {
+		sendError(res, 400, "Missing message in request body");
+		return;
+	}
+
+	if (!body.agentId) {
+		sendError(res, 400, "Missing agentId in request body");
+		return;
+	}
+
+	const agentId = sanitizeId(body.agentId);
+	const sessionId = body.sessionId ? sanitizeId(body.sessionId) : randomUUID();
+	const sessionDir = getUserSessionDir(userId, agentId, sessionId);
+	let cwd: string;
+	if (body.cwd) {
+		const sessionsRoot = resolvePath(getSessionsDir(), userId);
+		const resolvedCwd = resolvePath(body.cwd);
+		if (!resolvedCwd.startsWith(sessionsRoot + sep) && resolvedCwd !== sessionsRoot) {
+			sendError(res, 403, "cwd must be within the user's session directory");
+			return;
+		}
+		cwd = resolvedCwd;
+	} else {
+		cwd = sessionDir;
+	}
+	const streamMode = body.stream ?? false;
+
+	if (!existsSync(cwd)) {
+		mkdirSync(cwd, { recursive: true });
+	}
+
+	const dmpContext = JSON.stringify({
+		"X-User-Id": userId,
+		"X-Agent-Id": agentId,
+		"X-Conversation-Id": sessionId,
+	});
+	const dmpContextDir = join(cwd, ".pi");
+	if (!existsSync(dmpContextDir)) {
+		mkdirSync(dmpContextDir, { recursive: true });
+	}
+	writeFileSync(join(dmpContextDir, "dmp-context.json"), dmpContext, "utf-8");
+
+	const agentSessions = getOrCreateAgentSessionMap(agentId);
+	const agentOptions = getOrCreateAgentOptionsMap(agentId);
+	let session = agentSessions.get(sessionId);
+	let isNewSession = false;
+
+	console.log(
+		`[HTTP] /prompt called, agentId=${agentId}, sessionId=${sessionId}, existingSession=${!!session}, defaultHttpModel=${defaultHttpModel?.provider}/${defaultHttpModel?.id}`,
+	);
+
+	// If session is still streaming from a previous request, abort it first
+	if (session?.isStreaming) {
+		console.log(`[HTTP] /prompt: session ${sessionId} is still streaming, aborting...`);
+		try {
+			await session.abort();
+			console.log(`[HTTP] /prompt: session ${sessionId} aborted successfully`);
+		} catch (err: unknown) {
+			console.error(`[HTTP] /prompt: error aborting session ${sessionId}:`, err);
+		}
+	}
+
+	if (!session) {
+		try {
+			const libreChatTools = createLibreChatTools(cwd);
+			const allTools = [...libreChatTools, ...getCachedMCPTools(), ...getHttpSkillAgentTools()];
+
+			const sessionDir = join(getUserSessionDir(userId, agentId, sessionId), ".pi", "sessions");
+
+			const existingSessionFile = findMostRecentSession(sessionDir);
+			let sessionManager: SessionManager;
+
+			if (existingSessionFile) {
+				sessionManager = SessionManager.open(existingSessionFile, sessionDir);
+				isNewSession = false;
+			} else {
+				sessionManager = SessionManager.create(cwd, sessionDir);
+				isNewSession = true;
+			}
+
+			console.log(`[HTTP] Creating session with model: ${defaultHttpModel?.provider}/${defaultHttpModel?.id}`);
+
+			const resourceLoader = await createHttpResourceLoader(userId, cwd);
+
+			let authStorage: AuthStorage | undefined;
+			if (httpModelConfig?.apiKey && defaultHttpModel) {
+				authStorage = AuthStorage.create();
+				authStorage.setRuntimeApiKey(defaultHttpModel.provider, httpModelConfig.apiKey);
+			}
+
+			const options: CreateAgentSessionOptions = {
+				cwd,
+				sessionManager,
+				allowedRoot: getUserRootDir(userId),
+				bashToolOptions: { spawnHook: createDmpSpawnHook(userId, agentId, sessionId), sandbox: true },
+				customTools: allTools,
+				model: defaultHttpModel,
+				continueSession: false,
+				forceModel: true,
+				resourceLoader,
+				authStorage,
+			};
+			const result = await createAgentSession(options);
+			session = result.session;
+			console.log(`[HTTP] Session created with model: ${session.model?.provider}/${session.model?.id}`);
+			agentSessions.set(sessionId, session);
+			agentOptions.set(sessionId, options);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "Unknown error";
+			sendError(res, 500, `Failed to create session: ${message}`);
+			return;
+		}
+	}
+
+	let finalMessage: string = "";
+	let responseSent = false;
+	let collectedUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
+	const generatedFiles: {
+		name: string;
+		path: string;
+		type: string;
+		mimeType: string;
+		size: number;
+		url?: string;
+	}[] = [];
+
+	if (streamMode) {
+		res.writeHead(200, {
+			"Content-Type": "text/event-stream",
+			"Cache-Control": "no-cache",
+			Connection: "keep-alive",
+			"X-Accel-Buffering": "no",
+		});
+		res.flushHeaders();
+
+		sendSSE(res, "session", {
+			agentId,
+			sessionId,
+			cwd: session.sessionManager.getCwd(),
+			newSession: isNewSession,
+		});
+	}
+
+	const unsubscribe = session.subscribe((event) => {
+		if (responseSent) {
+			return;
+		}
+
+		if (streamMode) {
+			if (event.type === "message_update") {
+				const assistantEvent = event.assistantMessageEvent;
+				if (
+					assistantEvent.type === "thinking_start" ||
+					assistantEvent.type === "thinking_delta" ||
+					assistantEvent.type === "thinking_end"
+				) {
+					sendSSE(res, "thinking", {
+						type: assistantEvent.type,
+						contentIndex: "contentIndex" in assistantEvent ? assistantEvent.contentIndex : undefined,
+						delta: "delta" in assistantEvent ? assistantEvent.delta : undefined,
+						content: "content" in assistantEvent ? assistantEvent.content : undefined,
+					});
+				} else if (
+					assistantEvent.type === "text_start" ||
+					assistantEvent.type === "text_delta" ||
+					assistantEvent.type === "text_end"
+				) {
+					sendSSE(res, "text", {
+						type: assistantEvent.type,
+						contentIndex: "contentIndex" in assistantEvent ? assistantEvent.contentIndex : undefined,
+						delta: "delta" in assistantEvent ? assistantEvent.delta : undefined,
+						content: "content" in assistantEvent ? assistantEvent.content : undefined,
+					});
+				}
+			} else if (event.type === "tool_execution_start") {
+				sendSSE(res, "tool_start", {
+					toolCallId: event.toolCallId,
+					toolName: event.toolName,
+					args: event.args,
+				});
+			} else if (event.type === "tool_execution_update") {
+				sendSSE(res, "tool_update", {
+					toolCallId: event.toolCallId,
+					toolName: event.toolName,
+					args: event.args,
+					partialResult: event.partialResult,
+				});
+			} else if (event.type === "tool_execution_end") {
+				sendSSE(res, "tool_end", {
+					toolCallId: event.toolCallId,
+					toolName: event.toolName,
+					result: event.result,
+					isError: event.isError,
+				});
+			}
+		}
+
+		if (event.type === "message_end" && event.message.role === "assistant") {
+			const msg = event.message;
+			const textContent = msg.content.find((c) => c.type === "text");
+			finalMessage = textContent?.text ?? "";
+			if (msg.usage) {
+				collectedUsage = {
+					prompt_tokens: (msg.usage as any).input || 0,
+					completion_tokens: (msg.usage as any).output || 0,
+					total_tokens: (msg.usage as any).totalTokens || 0,
+				};
+			}
+			if (msg.stopReason === "error" && msg.errorMessage) {
+				responseSent = true;
+				if (streamMode) {
+					sendSSE(res, "error", { message: msg.errorMessage });
+					res.end();
+				} else {
+					sendError(res, 500, msg.errorMessage);
+				}
+				return;
+			}
+		}
+
+		if (event.type === "turn_end") {
+			for (const toolResult of event.toolResults ?? []) {
+				const details = (toolResult as any).details;
+				if (details?.localFiles && Array.isArray(details.localFiles)) {
+					for (const file of details.localFiles) {
+						const fileName = file.name;
+						const localPath = file.localPath;
+						if (existsSync(localPath)) {
+							const stats = require("node:fs").statSync(localPath);
+							generatedFiles.push({
+								name: fileName,
+								path: localPath,
+								type: "code",
+								mimeType: getMimeType(fileName),
+								size: stats.size,
+								url: `${getBaseUrl()}/files/download?agentId=${agentId}&sessionId=${sessionId}&filename=${encodeURIComponent(fileName)}`,
+							});
+						}
+					}
+				}
+			}
+		}
+	});
+
+	const dmpSystemSuffix = `\n[DMP Context]\nX-User-Id: ${userId}\nX-Agent-Id: ${agentId}\nX-Conversation-Id: ${sessionId}\nWhen calling any dmp- skill script via python, always pass these as CLI arguments: --X-User-Id "${userId}" --X-Agent-Id "${agentId}" --X-Conversation-Id "${sessionId}"`;
+
+	try {
+		await session.prompt(body.message, {
+			appendSystemPrompt: (body.systemPrompt ?? "") + dmpSystemSuffix,
+		});
+
+		await new Promise<void>((resolve) => {
+			const checkDone = (): void => {
+				setTimeout(() => {
+					if (session!.agent.state.pendingToolCalls.size === 0) {
+						resolve();
+					} else {
+						checkDone();
+					}
+				}, 100);
+			};
+			checkDone();
+		});
+
+		if (!responseSent) {
+			if (streamMode) {
+				if (collectedUsage) {
+					sendSSE(res, "usage", collectedUsage);
+				}
+				sendSSE(res, "done", {
+					message: finalMessage,
+					generatedFiles,
+				});
+				res.end();
+			} else {
+				sendJson(res, 200, {
+					message: finalMessage,
+					agentId,
+					sessionId,
+					cwd: session.sessionManager.getCwd(),
+					newSession: isNewSession,
+				});
+			}
+		}
+	} catch (error) {
+		if (responseSent) {
+			return;
+		}
+		const message = error instanceof Error ? error.message : "Unknown error";
+		if (streamMode) {
+			sendSSE(res, "error", { message });
+			res.end();
+		} else {
+			sendError(res, 500, `Prompt execution failed: ${message}`);
+		}
+	} finally {
+		unsubscribe();
+	}
+}
+
+export async function handleChatCompletions(req: IncomingMessage, res: ServerResponse): Promise<void> {
+	const userId = getUserIdOrReject(req, res);
+	if (!userId) return;
+
+	const agentId = req.headers["x-agent-id"];
+	if (!agentId || typeof agentId !== "string") {
+		sendError(res, 400, "Missing X-Agent-Id header");
+		return;
+	}
+
+	const sessionIdHeader = req.headers["x-session-id"];
+	const sessionId = typeof sessionIdHeader === "string" ? sessionIdHeader : randomUUID();
+
+	const body = await parseJsonBody<{
+		messages: Array<{ role: string; content?: string }>;
+		model?: string;
+		stream?: boolean;
+	}>(req);
+
+	if (!body?.messages || !Array.isArray(body.messages) || body.messages.length === 0) {
+		sendError(res, 400, "Missing or empty messages in request body");
+		return;
+	}
+
+	let systemPrompt: string | undefined;
+	let userMessage: string | undefined;
+
+	for (const msg of body.messages) {
+		if (msg.role === "system" && msg.content) {
+			systemPrompt = msg.content;
+		}
+	}
+
+	for (let i = body.messages.length - 1; i >= 0; i--) {
+		if (body.messages[i].role === "user" && body.messages[i].content) {
+			userMessage = body.messages[i].content;
+			break;
+		}
+	}
+
+	if (!userMessage) {
+		sendError(res, 400, "No user message found in messages");
+		return;
+	}
+
+	const cwd = getUserSessionDir(userId, agentId, sessionId);
+	const streamMode = body.stream ?? false;
+
+	if (!existsSync(cwd)) {
+		mkdirSync(cwd, { recursive: true });
+	}
+
+	const agentSessions = getOrCreateAgentSessionMap(agentId);
+	const agentOptions = getOrCreateAgentOptionsMap(agentId);
+	let session = agentSessions.get(sessionId);
+
+	console.log(`[HTTP] /v1/chat/completions called, sessionId=${sessionId}, existingSession=${!!session}`);
+
+	if (!session) {
+		try {
+			const libreChatTools = createLibreChatTools(cwd);
+			const allTools = [...libreChatTools, ...getCachedMCPTools(), ...getHttpSkillAgentTools()];
+			const sessionDir = join(getUserSessionDir(userId, agentId, sessionId), ".pi", "sessions");
+			const existingSessionFile = findMostRecentSession(sessionDir);
+			let sessionManager: SessionManager;
+
+			if (existingSessionFile) {
+				sessionManager = SessionManager.open(existingSessionFile, sessionDir);
+			} else {
+				sessionManager = SessionManager.create(cwd, sessionDir);
+			}
+
+			const resourceLoader = await createHttpResourceLoader(userId, cwd);
+
+			let authStorage: AuthStorage | undefined;
+			if (httpModelConfig?.apiKey && defaultHttpModel) {
+				authStorage = AuthStorage.create();
+				authStorage.setRuntimeApiKey(defaultHttpModel.provider, httpModelConfig.apiKey);
+			}
+
+			const options: CreateAgentSessionOptions = {
+				cwd,
+				sessionManager,
+				allowedRoot: getUserRootDir(userId),
+				bashToolOptions: { spawnHook: createDmpSpawnHook(userId, agentId, sessionId), sandbox: true },
+				customTools: allTools,
+				model: defaultHttpModel,
+				continueSession: false,
+				forceModel: true,
+				resourceLoader,
+				authStorage,
+			};
+
+			const result = await createAgentSession(options);
+			session = result.session;
+			agentSessions.set(sessionId, session);
+			agentOptions.set(sessionId, options);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "Unknown error";
+			sendError(res, 500, `Failed to create session: ${message}`);
+			return;
+		}
+	}
+
+	const chatCompletionId = `chatcmpl-${randomUUID()}`;
+	const created = Math.floor(Date.now() / 1000);
+	const modelName = session.model?.id ?? body.model ?? "unknown";
+	let responseSent = false;
+	let collectedText = "";
+	let collectedThinking = "";
+	const collectedToolCalls: Array<{
+		id: string;
+		type: "function";
+		function: { name: string; arguments: string };
+	}> = [];
+	let collectedFinishReason: string = "stop";
+	let collectedUsage: { input: number; output: number; totalTokens: number } | undefined;
+	const toolCallIndexMap = new Map<string, number>();
+	let nextToolCallIndex = 0;
+
+	function sendOpenAIChunk(delta: Record<string, unknown>, finishReason: string | null): void {
+		res.write(
+			`data: ${JSON.stringify({
+				id: chatCompletionId,
+				object: "chat.completion.chunk",
+				created,
+				model: modelName,
+				choices: [{ index: 0, delta, finish_reason: finishReason }],
+			})}\n\n`,
+		);
+		if (typeof (res as any).flush === "function") {
+			(res as any).flush();
+		}
+	}
+
+	if (streamMode) {
+		res.writeHead(200, {
+			"Content-Type": "text/event-stream",
+			"Cache-Control": "no-cache",
+			Connection: "keep-alive",
+			"X-Accel-Buffering": "no",
+		});
+		res.flushHeaders();
+
+		sendOpenAIChunk({ role: "assistant", content: null }, null);
+	}
+
+	const unsubscribe = session.subscribe((event) => {
+		if (responseSent) return;
+
+		if (streamMode && event.type === "message_update") {
+			const ae = event.assistantMessageEvent;
+
+			if (ae.type === "thinking_delta") {
+				sendOpenAIChunk({ reasoning_content: ae.delta }, null);
+			} else if (ae.type === "text_delta") {
+				sendOpenAIChunk({ content: ae.delta }, null);
+			} else if (ae.type === "toolcall_start") {
+				const tc = ae.partial.content[ae.contentIndex];
+				if (tc && tc.type === "toolCall") {
+					const idx = nextToolCallIndex++;
+					toolCallIndexMap.set(tc.id, idx);
+					sendOpenAIChunk(
+						{
+							tool_calls: [
+								{
+									index: idx,
+									id: tc.id,
+									type: "function",
+									function: { name: tc.name, arguments: "" },
+								},
+							],
+						},
+						null,
+					);
+				}
+			} else if (ae.type === "toolcall_delta") {
+				const tc = ae.partial.content[ae.contentIndex];
+				if (tc && tc.type === "toolCall") {
+					const idx = toolCallIndexMap.get(tc.id) ?? 0;
+					sendOpenAIChunk(
+						{
+							tool_calls: [{ index: idx, function: { arguments: ae.delta } }],
+						},
+						null,
+					);
+				}
+			}
+		} else if (!streamMode && event.type === "message_update") {
+			const ae = event.assistantMessageEvent;
+
+			if (ae.type === "thinking_delta") {
+				collectedThinking += ae.delta;
+			} else if (ae.type === "text_delta") {
+				collectedText += ae.delta;
+			}
+		}
+
+		if (event.type === "message_end" && event.message.role === "assistant") {
+			const msg = event.message;
+			for (const c of msg.content) {
+				if (c.type === "text") {
+					collectedText += c.text;
+				} else if (c.type === "thinking") {
+					collectedThinking += c.thinking;
+				} else if (c.type === "toolCall") {
+					collectedToolCalls.push({
+						id: c.id,
+						type: "function",
+						function: {
+							name: c.name,
+							arguments: JSON.stringify(c.arguments),
+						},
+					});
+				}
+			}
+			collectedFinishReason = msg.stopReason === "toolUse" ? "tool_calls" : "stop";
+			collectedUsage = msg.usage;
+			if (msg.stopReason === "error" && msg.errorMessage) {
+				responseSent = true;
+				if (streamMode) {
+					sendOpenAIChunk({ content: msg.errorMessage }, "stop");
+					res.write("data: [DONE]\n\n");
+					res.end();
+				} else {
+					sendError(res, 500, msg.errorMessage);
+				}
+			}
+		}
+	});
+
+	const chatDmpSuffix = `\n[DMP Context]\nX-User-Id: ${userId}\nX-Agent-Id: ${agentId}\nX-Conversation-Id: ${sessionId}\nWhen calling any dmp- skill script via python, always pass these as CLI arguments: --X-User-Id "${userId}" --X-Agent-Id "${agentId}" --X-Conversation-Id "${sessionId}"`;
+
+	try {
+		await session.prompt(userMessage, {
+			appendSystemPrompt: (systemPrompt ?? "") + chatDmpSuffix,
+		});
+
+		await new Promise<void>((resolve) => {
+			const checkDone = (): void => {
+				setTimeout(() => {
+					if (session!.agent.state.pendingToolCalls.size === 0) {
+						resolve();
+					} else {
+						checkDone();
+					}
+				}, 100);
+			};
+			checkDone();
+		});
+
+		if (!responseSent) {
+			if (streamMode) {
+				sendOpenAIChunk({}, "stop");
+				res.write("data: [DONE]\n\n");
+				res.end();
+			} else {
+				const message: Record<string, unknown> = {
+					role: "assistant",
+					content: collectedText || null,
+				};
+
+				if (collectedThinking) {
+					message.reasoning_content = collectedThinking;
+				}
+
+				if (collectedToolCalls.length > 0) {
+					message.tool_calls = collectedToolCalls;
+				}
+
+				sendJson(res, 200, {
+					id: chatCompletionId,
+					object: "chat.completion",
+					created,
+					model: modelName,
+					choices: [
+						{
+							index: 0,
+							message,
+							finish_reason: collectedFinishReason,
+						},
+					],
+					usage: collectedUsage
+						? {
+								prompt_tokens: collectedUsage.input,
+								completion_tokens: collectedUsage.output,
+								total_tokens: collectedUsage.totalTokens,
+							}
+						: {
+								prompt_tokens: 0,
+								completion_tokens: 0,
+								total_tokens: 0,
+							},
+				});
+			}
+		}
+	} catch (error) {
+		if (responseSent) return;
+		const message = error instanceof Error ? error.message : "Unknown error";
+		if (streamMode) {
+			sendOpenAIChunk({ content: message }, "stop");
+			res.write("data: [DONE]\n\n");
+			res.end();
+		} else {
+			sendError(res, 500, `Chat completion failed: ${message}`);
+		}
+	} finally {
+		unsubscribe();
+	}
+}

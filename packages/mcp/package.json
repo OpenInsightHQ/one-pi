@@ -1,0 +1,44 @@
+{
+	"name": "@mariozechner/pi-mcp",
+	"version": "0.62.0",
+	"description": "MCP client for connecting to external MCP servers",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"scripts": {
+		"clean": "shx rm -rf dist",
+		"build": "tsgo -p tsconfig.build.json",
+		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
+		"test": "vitest --run",
+		"prepublishOnly": "npm run clean && npm run build"
+	},
+	"dependencies": {
+		"@mariozechner/pi-agent-core": "^0.62.0",
+		"@mariozechner/pi-ai": "^0.62.0"
+	},
+	"keywords": [
+		"ai",
+		"agent",
+		"mcp",
+		"model-context-protocol"
+	],
+	"author": "Mario Zechner",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/OpenInsightHQ/pi-agent.git",
+		"directory": "packages/mcp"
+	},
+	"engines": {
+		"node": ">=20.0.0"
+	},
+	"devDependencies": {
+		"@types/node": "^24.3.0",
+		"typescript": "^5.7.3",
+		"vitest": "^3.2.4"
+	}
+}
