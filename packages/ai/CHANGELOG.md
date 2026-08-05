@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Moved `canvas` from `devDependencies` to `optionalDependencies` so `npm install` no longer fails when `canvas` cannot fetch a prebuilt native binary and the host lacks Visual Studio C++ build tools. `canvas` is only used by the one-off `scripts/generate-test-image.ts`, whose output (`test/data/red-circle.png`) is already committed.
+
 ## [0.62.0] - 2026-03-23
 
 ### Added
