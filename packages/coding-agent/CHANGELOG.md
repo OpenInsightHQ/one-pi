@@ -6,6 +6,7 @@
 
 - HTTP API server mode (`--http` flag) for skill management and execution
   - `GET /skills` - List all available skills including MCP tools
+  - `GET /skills/download/:category/:name` - Download a skill from the skill repo (`/app/skill-repo`) as a zip; the archive contains the skill directory at its root
   - `POST /skills/execute` - Execute a skill by name
   - `GET /mcp/tools` - List MCP tools from extensions
   - `GET /health` - Health check endpoint

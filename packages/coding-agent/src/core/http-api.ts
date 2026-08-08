@@ -49,6 +49,7 @@ import {
 	handleMySkills,
 	handleMySkillUpload,
 	handleSkillDetail,
+	handleSkillDownload,
 	handleSkillExecute,
 	handleSkills,
 	handleSkillsAuthorize,
@@ -266,6 +267,14 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 			await handleMySkillDelete(req, res, skillName);
 			return;
 		}
+	}
+
+	const skillDownloadMatch = pathname.match(/^\/skills\/download\/([^/]+)\/([^/]+)$/);
+	if (skillDownloadMatch && req.method === "GET") {
+		const category = decodeURIComponent(skillDownloadMatch[1]);
+		const skillName = decodeURIComponent(skillDownloadMatch[2]);
+		await handleSkillDownload(req, res, category, skillName);
+		return;
 	}
 
 	const skillDetailMatch = pathname.match(/^\/skills\/([^/]+)$/);

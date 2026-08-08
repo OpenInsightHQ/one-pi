@@ -3216,6 +3216,37 @@ export async function handleMySkillDownload(
 	archive.finalize();
 }
 
+export async function handleSkillDownload(
+	_req: IncomingMessage,
+	res: ServerResponse,
+	category: string,
+	skillName: string,
+): Promise<void> {
+	const skillDir = join(getSkillRepoDir(category), sanitizeId(skillName));
+	if (!existsSync(skillDir) || !statSync(skillDir).isDirectory()) {
+		sendError(res, 404, `Skill "${skillName}" not found in category "${category}"`);
+		return;
+	}
+
+	const zipFilename = encodeURIComponent(`${skillName}.zip`);
+	res.writeHead(200, {
+		"Content-Disposition": `attachment; filename="${zipFilename}"`,
+		"Content-Type": "application/zip",
+	});
+
+	const archive = archiver("zip", { zlib: { level: 9 } });
+	archive.on("error", (err: Error) => {
+		console.error("Archive error:", err);
+		if (!res.writableEnded) {
+			res.end();
+		}
+	});
+
+	archive.pipe(res);
+	archive.directory(skillDir, skillName);
+	archive.finalize();
+}
+
 export async function handleMySkillDelete(req: IncomingMessage, res: ServerResponse, skillName: string): Promise<void> {
 	const urlObj = new URL(req.url ?? "/", `http://${req.headers.host}`);
 	const userId = urlObj.searchParams.get("userId") ?? getUserId(req);
