@@ -8,9 +8,6 @@ If the user did not give you a concrete task in their first message, read README
 - packages/tui/README.md
 - packages/agent/README.md
 - packages/coding-agent/README.md
-- packages/mom/README.md
-- packages/pods/README.md
-- packages/web-ui/README.md
 
 ## Architecture
 
@@ -19,7 +16,7 @@ Monorepo with lockstep versioning: all packages share the same version number, u
 **Build order matters.** The root `npm run build` builds in dependency order:
 
 ```
-tui → ai → agent → mcp → coding-agent → mom → web-ui → pods
+tui → ai → agent → coding-agent
 ```
 
 Workspace-internal dependency graph:
@@ -28,16 +25,10 @@ Workspace-internal dependency graph:
 ai (leaf)          tui (leaf)
   ↓                  ↓
 agent               │
-  ├→ mcp            │
-  ├→ pods            │
-  ├→ coding-agent ←──┘ (depends on ai, agent, tui)
-  └→ mom            │
-web-ui ←────────────┘ (depends on ai, tui)
+  └→ coding-agent ←──┘ (depends on ai, agent, tui)
 ```
 
 Each package uses `tsconfig.build.json` (not `tsconfig.json`) for emitting to `dist/`. The root `tsconfig.json` (with `noEmit: true` and path aliases) is for IDE resolution only.
-
-**web-ui differs from other packages**: uses `tsc` instead of `tsgo`, has its own `check` script (`biome + tsc --noEmit`), and is excluded from the root tsconfig. Type-check web-ui separately: `cd packages/web-ui && npm run check`.
 
 ## Code Quality
 
@@ -47,20 +38,19 @@ Each package uses `tsconfig.build.json` (not `tsconfig.json`) for emitting to `d
 - NEVER remove or downgrade code to fix type errors from outdated dependencies; upgrade the dependency instead
 - Always ask before removing functionality or code that appears to be intentional
 - Never hardcode key checks (e.g. `matchesKey(keyData, "ctrl+x")`). All keybindings must be configurable. Add defaults to the matching object (`DEFAULT_EDITOR_KEYBINDINGS` or `DEFAULT_APP_KEYBINDINGS`)
-- **Generated files** — never manually edit: `models.generated.ts`, `test-sessions.ts`, `packages/web-ui/src/app.css`
+- **Generated files** — never manually edit: `models.generated.ts`, `test-sessions.ts`
 
 ## Commands
 
-- **`npm run build` must run before `npm run check`.** web-ui's `tsc` needs `.d.ts` files from compiled workspace dependencies.
+- **`npm run build` must run before `npm run check`.**
 - After code changes (not docs): `npm run check` (get full output, no tail). Fix all errors, warnings, and infos before committing.
-  - Root check runs: biome (lint+format+write) → `tsgo --noEmit` → browser-smoke check → web-ui check
+  - Root check runs: biome (lint+format+write) → `tsgo --noEmit` → browser-smoke check
 - `npm run check` does not run tests.
-- **Pre-commit hook** runs `npm run check` (+ browser-smoke if ai/web-ui files changed). Reformatted files are re-staged automatically.
+- **Pre-commit hook** runs `npm run check` (+ browser-smoke if ai files changed). Reformatted files are re-staged automatically.
 - **Running tests:**
   - Full suite: `./test.sh` — unsets API keys so LLM-dependent tests are skipped
-  - Single test (vitest packages — ai, agent, coding-agent, mcp): `cd packages/<pkg> && npx vitest --run test/specific.test.ts`
+  - Single test (vitest packages — ai, agent, coding-agent): `cd packages/<pkg> && npx vitest --run test/specific.test.ts`
   - **tui** uses `node --test`, not vitest: `cd packages/tui && node --test --import tsx test/specific.test.ts`
-  - **web-ui** and **mom** have no test scripts; **pods** has no test script either
   - Always run tests from the package root, not the repo root
   - If you create or modify a test file, you MUST run it and iterate until it passes
 - Do not run `npm run dev` or `npm test` (full suite). Only run specific tests as instructed.
@@ -78,7 +68,7 @@ When reading issues:
 - Always read all comments: `gh issue view <number> --json title,body,comments,labels,state`
 
 When creating issues:
-- Add `pkg:*` labels: `pkg:agent`, `pkg:ai`, `pkg:coding-agent`, `pkg:mom`, `pkg:pods`, `pkg:tui`, `pkg:web-ui`
+- Add `pkg:*` labels: `pkg:agent`, `pkg:ai`, `pkg:coding-agent`, `pkg:tui`
 - If an issue spans multiple packages, add all relevant labels
 
 When posting issue/PR comments:
@@ -164,7 +154,7 @@ Sessions are multi-tenant: keyed by `agentId + sessionId`, with per-user working
 
 ## Changelog
 
-Each package has its own `packages/*/CHANGELOG.md` (except `pods` and `mcp`). Do not edit changelogs for external contributor PRs (maintainers add entries).
+Each package has its own `packages/*/CHANGELOG.md`. Do not edit changelogs for external contributor PRs (maintainers add entries).
 
 ### Format
 
