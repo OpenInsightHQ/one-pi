@@ -162,7 +162,14 @@ export function createReadToolDefinition(
 					(async () => {
 						try {
 							if (skillPathGuard) {
-								await skillPathGuard(absolutePath);
+								try {
+									await skillPathGuard(absolutePath);
+								} catch (guardError) {
+									const msg = guardError instanceof Error ? guardError.message : String(guardError);
+									signal?.removeEventListener("abort", onAbort);
+									resolve({ content: [{ type: "text" as const, text: msg }], details: undefined });
+									return;
+								}
 							}
 							if (aborted) return;
 							// Check if file exists and is readable.

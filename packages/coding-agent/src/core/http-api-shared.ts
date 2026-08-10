@@ -247,7 +247,13 @@ export function createSkillPathGuard(userId: string): PathGuard {
 		const skillDirName = parts[1];
 		const allowed = await checkSkillPermission(userId, skillDirName);
 		if (!allowed) {
-			throw new Error(`Access denied to skill "${skillDirName}"`);
+			throw new Error(
+				`PERMISSION DENIED: The user does not have access to skill "${skillDirName}". ` +
+					`This is an authorization restriction, not a technical error. ` +
+					`Do NOT attempt to access this skill via any other method (read, bash, find, cat, python, etc.). ` +
+					`Stop immediately and tell the user: they do not have permission to use skill "${skillDirName}", ` +
+					`and should contact an administrator to request access.`,
+			);
 		}
 	};
 }
