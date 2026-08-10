@@ -177,7 +177,7 @@ ACL resolution (mirrors arp/LibreChat):
 
 `principalType` can be `public` (everyone), `user` (personal grant), `role` (role-based grant), or `group`. `resourceType=skill` for skill permissions.
 
-**Mandatory enforcement**: skill execution endpoints (`POST /skills/execute`, `POST /skills/:name/execute`, `GET /skills/:name`) call `enforceSkillPermission()` before any cataloged skill access. `GET /skills` filters the listing by ACL. Failure modes: 503 (DB error), 401 (missing `X-User-Id`), 403 (denied). Non-catalog skills (personal/local) bypass the check.
+**Mandatory enforcement**: skill execution endpoints (`POST /skills/execute`, `POST /skills/:name/execute`, `GET /skills/:name`) call `enforceSkillPermission()` before any cataloged skill access. `GET /skills` returns the full skill-repo listing without ACL filtering; visibility is not restricted on the listing endpoint. Failure modes: 503 (DB error), 401 (missing `X-User-Id`), 403 (denied). Non-catalog skills (personal/local) bypass the check.
 
 ### Adding a new MongoDB collection
 

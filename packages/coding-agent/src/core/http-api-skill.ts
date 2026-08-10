@@ -32,7 +32,7 @@ import {
 	sendError,
 	sendJson,
 } from "./http-api-shared.js";
-import { checkSkillPermission, filterAuthorizedSkillNames, getSkillIdByName, isMongoEnabled } from "./mongo/index.js";
+import { checkSkillPermission, getSkillIdByName, isMongoEnabled } from "./mongo/index.js";
 import { loadSkills, type SkillFrontmatter } from "./skills.js";
 import { discoverAndRegisterMCPTools, loadMCPRegistry, unregisterMCPTools } from "./tools/mcp-registry.js";
 
@@ -2921,68 +2921,21 @@ export async function handleSkills(req: IncomingMessage, res: ServerResponse): P
 	const urlObj = new URL(req.url ?? "/", `http://${req.headers.host}`);
 	const groupBy = urlObj.searchParams.get("groupBy");
 	const categoryFilter = urlObj.searchParams.get("category");
-	const sourceFilter = urlObj.searchParams.get("source");
 
-	const skillPaths = loadSkillPathsFromSettings();
-	const { skills: loadedSkills } = loadSkills({ skillPaths, includeDefaults: true });
 	const skillInfos: Array<{ name: string; description: string; source: string; scope: string; group?: string }> =
-		loadedSkills.map((skill) => ({
-			name: skill.name,
-			description: skill.description,
-			source: skill.sourceInfo.source === "local" ? "local" : skill.sourceInfo.source,
-			scope: skill.sourceInfo.scope ?? "user",
-		}));
+		loadRepoSkills()
+			.filter((skill) => (categoryFilter ? skill.category === categoryFilter : true))
+			.map((skill) => ({
+				name: skill.name,
+				description: skill.description,
+				source: "repo",
+				scope: "global",
+				group: skill.category,
+			}));
 
-	const httpSkills = loadHttpSkills();
-	for (const skill of httpSkills)
-		skillInfos.push({
-			name: `http:${skill.name}`,
-			description: skill.description ?? skill.name,
-			source: "http",
-			scope: "global",
-			group: skill.group,
-		});
-
-	const repoSkills = loadRepoSkills();
-	const userId = getUserId(req);
-	const repoSkillNames = repoSkills.map((s) => s.name);
-	let authorizedRepoNames: Set<string>;
-	try {
-		authorizedRepoNames = await filterAuthorizedSkillNames(userId, repoSkillNames);
-	} catch (error) {
-		const msg = error instanceof Error ? error.message : String(error);
-		console.warn(`[MongoDB] Skill listing filter failed, showing all: ${msg}`);
-		authorizedRepoNames = new Set(repoSkillNames);
-	}
-
-	for (const skill of repoSkills) {
-		if (categoryFilter && skill.category !== categoryFilter) continue;
-		if (!authorizedRepoNames.has(skill.name)) continue;
-		skillInfos.push({
-			name: skill.name,
-			description: skill.description,
-			source: "repo",
-			scope: "global",
-			group: skill.category,
-		});
-	}
-
-	const filtered = sourceFilter ? skillInfos.filter((s) => s.source === sourceFilter) : skillInfos;
-
-	if (groupBy === "source") {
-		const groups: Record<string, typeof skillInfos> = {};
-		for (const skill of filtered) {
-			if (!groups[skill.source]) groups[skill.source] = [];
-			groups[skill.source].push(skill);
-		}
-		sendJson(res, 200, {
-			groups: Object.entries(groups)
-				.filter(([, items]) => items.length > 0)
-				.map(([source, items]) => ({ name: source, source, items })),
-		});
-	} else if (groupBy === "category") {
+	if (groupBy === "category") {
 		const categories: Record<string, typeof skillInfos> = {};
-		for (const skill of filtered) {
+		for (const skill of skillInfos) {
 			const cat = skill.group ?? "default";
 			if (!categories[cat]) categories[cat] = [];
 			categories[cat].push(skill);
@@ -2993,7 +2946,7 @@ export async function handleSkills(req: IncomingMessage, res: ServerResponse): P
 				.map(([name, items]) => ({ name, items })),
 		});
 	} else {
-		sendJson(res, 200, { skills: filtered });
+		sendJson(res, 200, { skills: skillInfos });
 	}
 }
 
