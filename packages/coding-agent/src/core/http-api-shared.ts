@@ -6,6 +6,7 @@ import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { getAgentDir, getSessionsDir } from "../config.js";
 import type { AgentSession } from "./agent-session.js";
+import { getAuthorizedSkillDirs } from "./mongo/index.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
 import type { CreateAgentSessionOptions } from "./sdk.js";
@@ -197,10 +198,28 @@ export function validatePathWithinCwd(cwd: string, inputPath: string): string {
 export async function createHttpResourceLoader(userId: string, cwd: string): Promise<ResourceLoader> {
 	const agentDir = getAgentDir();
 	const additionalSkillPaths: string[] = [];
+
+	// (1) Personal skills — stored in the user's own skill directory
 	const userSkillsDir = join(getSessionsDir(), userId, "skills");
 	if (existsSync(userSkillsDir)) {
 		additionalSkillPaths.push(userSkillsDir);
 	}
+
+	// (2) Authorized skills — fetched from MongoDB and filtered by ACL permissions.
+	//     The `skills` collection stores metadata + savePath; SKILL.md lives on disk.
+	//     If MongoDB is not configured or the query fails, we gracefully continue
+	//     with personal skills only.
+	try {
+		const authorizedDirs = await getAuthorizedSkillDirs(userId);
+		additionalSkillPaths.push(...authorizedDirs);
+		if (authorizedDirs.length > 0) {
+			console.log(`[HTTP] Loaded ${authorizedDirs.length} authorized skill(s) from MongoDB for user ${userId}`);
+		}
+	} catch (error) {
+		const msg = error instanceof Error ? error.message : String(error);
+		console.warn(`[HTTP] Failed to load authorized skills from MongoDB for user ${userId}: ${msg}`);
+	}
+
 	const loader = new DefaultResourceLoader({ cwd, agentDir, additionalSkillPaths });
 	await loader.reload();
 	return loader;

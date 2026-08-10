@@ -32,6 +32,7 @@ import {
 	sendError,
 	sendJson,
 } from "./http-api-shared.js";
+import { checkSkillPermission, filterAuthorizedSkillNames, getSkillIdByName, isMongoEnabled } from "./mongo/index.js";
 import { loadSkills, type SkillFrontmatter } from "./skills.js";
 import { discoverAndRegisterMCPTools, loadMCPRegistry, unregisterMCPTools } from "./tools/mcp-registry.js";
 
@@ -2290,6 +2291,47 @@ async function executeMCPTool(
 	return data.result;
 }
 
+/**
+ * Mandatory permission gate for authorized skill execution.
+ *
+ * Returns `true` if the skill execution should proceed. Returns `false` (and
+ * sends an appropriate error response) when access must be denied.
+ *
+ * Rules:
+ *   - MongoDB not configured  → allow (personal-skills-only mode, no ACL)
+ *   - Skill not in catalog     → allow (it's a personal/local skill)
+ *   - Skill in catalog + no userId → deny 401 (can't verify permissions)
+ *   - Skill in catalog + userId lacks permission → deny 403
+ */
+async function enforceSkillPermission(req: IncomingMessage, res: ServerResponse, skillName: string): Promise<boolean> {
+	if (!isMongoEnabled()) return true;
+
+	let skillId: string | null;
+	try {
+		skillId = await getSkillIdByName(skillName);
+	} catch (error) {
+		const msg = error instanceof Error ? error.message : String(error);
+		console.warn(`[MongoDB] Permission check failed for skill "${skillName}": ${msg}`);
+		sendError(res, 503, `Unable to verify skill permissions: ${msg}`);
+		return false;
+	}
+	if (!skillId) return true;
+
+	const userId = getUserId(req);
+	if (!userId) {
+		sendError(res, 401, "X-User-Id header is required to execute authorized skills");
+		return false;
+	}
+
+	const allowed = await checkSkillPermission(userId, skillName);
+	if (!allowed) {
+		sendError(res, 403, `Access denied to skill "${skillName}"`);
+		return false;
+	}
+
+	return true;
+}
+
 async function executeRepoSkill(
 	skill: RepoSkillDetail,
 	methodName: string,
@@ -2902,8 +2944,20 @@ export async function handleSkills(req: IncomingMessage, res: ServerResponse): P
 		});
 
 	const repoSkills = loadRepoSkills();
+	const userId = getUserId(req);
+	const repoSkillNames = repoSkills.map((s) => s.name);
+	let authorizedRepoNames: Set<string>;
+	try {
+		authorizedRepoNames = await filterAuthorizedSkillNames(userId, repoSkillNames);
+	} catch (error) {
+		const msg = error instanceof Error ? error.message : String(error);
+		console.warn(`[MongoDB] Skill listing filter failed, showing all: ${msg}`);
+		authorizedRepoNames = new Set(repoSkillNames);
+	}
+
 	for (const skill of repoSkills) {
 		if (categoryFilter && skill.category !== categoryFilter) continue;
+		if (!authorizedRepoNames.has(skill.name)) continue;
 		skillInfos.push({
 			name: skill.name,
 			description: skill.description,
@@ -3269,9 +3323,10 @@ export async function handleMySkillDelete(req: IncomingMessage, res: ServerRespo
 	}
 }
 
-export async function handleSkillDetail(_req: IncomingMessage, res: ServerResponse, skillName: string): Promise<void> {
+export async function handleSkillDetail(req: IncomingMessage, res: ServerResponse, skillName: string): Promise<void> {
 	const repoDetail = loadRepoSkillDetail(skillName);
 	if (repoDetail) {
+		if (!(await enforceSkillPermission(req, res, skillName))) return;
 		sendJson(res, 200, repoDetail);
 		return;
 	}
@@ -3368,6 +3423,7 @@ export async function handleSkillsExecute(req: IncomingMessage, res: ServerRespo
 
 	const repoSkill = loadRepoSkillDetail(skillName);
 	if (repoSkill) {
+		if (!(await enforceSkillPermission(req, res, skillName))) return;
 		const methodName = body?.method as string | undefined;
 		if (repoSkill.methods.length > 0 && !methodName) {
 			sendError(
@@ -3431,6 +3487,7 @@ export async function handleSkillExecute(req: IncomingMessage, res: ServerRespon
 
 	const repoSkill = loadRepoSkillDetail(skillName);
 	if (repoSkill) {
+		if (!(await enforceSkillPermission(req, res, skillName))) return;
 		if (repoSkill.methods.length > 0 && !methodName) {
 			sendError(
 				res,

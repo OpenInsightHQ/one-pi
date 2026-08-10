@@ -329,6 +329,9 @@ ${chalk.bold("Environment Variables:")}
   PI_SHARE_VIEWER_URL              - Base URL for /share command (default: https://pi.dev/session/)
   PI_AI_ANTIGRAVITY_VERSION        - Override Antigravity User-Agent version (e.g., 1.23.0)
   PI_API_KEY                       - API key for HTTP server authentication (required when set)
+  MONGO_URI                        - MongoDB connection string (shared with arp/LibreChat).
+                                     Enables authorized skills + ACL permission checks.
+                                     When unset, runs in personal-skills-only mode.
 
 ${chalk.bold("Available Tools (default: read, bash, edit, write):")}
   read   - Read file contents

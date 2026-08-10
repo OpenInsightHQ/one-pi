@@ -60,6 +60,7 @@ import {
 	handleSkillsRegisterMcp,
 	handleSkillsUpload,
 } from "./http-api-skill.js";
+import { connectMongo } from "./mongo/index.js";
 import { addAllowedReadPrefix } from "./tools/path-utils.js";
 
 export { handleChatCompletions, handlePrompt } from "./http-api-chat.js";
@@ -549,6 +550,10 @@ export async function startHttpServer(
 	if (!process.env.PI_BASH_SANDBOX) {
 		process.env.PI_BASH_SANDBOX = "1";
 	}
+
+	// Connect to MongoDB (for authorized skills + ACL permission checks).
+	// Non-fatal: server starts regardless; authorized skills are simply unavailable on failure.
+	await connectMongo();
 
 	if (options.uploadLimits) {
 		setUploadLimits(options.uploadLimits);

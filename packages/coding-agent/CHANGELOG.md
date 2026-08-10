@@ -4,7 +4,14 @@
 
 ### Added
 
-- HTTP API server mode (`--http` flag) for skill management and execution
+- MongoDB integration for authorized skills and ACL permission checks, shared with the arp (LibreChat) system. Configured via `MONGO_URI` env var. When unset, pi runs in personal-skills-only mode.
+- Skill permissions are split into two sources: (1) **authorized skills** fetched from MongoDB `skills` collection and filtered by ACL (`aclentries` + `accessroles` tables), and (2) **personal skills** from the user's local `~/.pi/agent/sessions/<userId>/skills` directory.
+- MongoDB data-layer framework (`packages/coding-agent/src/core/mongo/`) with Mongoose schemas, models, and services for `skills`, `accessroles`, `aclentries`, `userroles`, and `roles` collections. Designed for extensibility — adding future collections (messages, conversations, systemprompts) requires only adding a schema + model + service file.
+- ACL permission model matching arp/LibreChat: resolves user → principals (USER + ROLE + PUBLIC), then queries `aclentries` with `$bitsAllSet` bitmask checks. Supports `public`, `user`, and `role` principal types.
+- Mandatory permission enforcement at skill execution endpoints (`POST /skills/execute`, `POST /skills/:name/execute`, `GET /skills/:name`). Cataloged skills without a valid ACL grant are blocked with 403/401 responses.
+- `GET /skills` listing now filters repo skills by the requesting user's ACL permissions.
+- HTTP API server startup connects to MongoDB non-fatally; authorized skills are unavailable on connection failure but the server still starts.
+
   - `GET /skills` - List all available skills including MCP tools
   - `GET /skills/download/:category/:name` - Download a skill from the skill repo (`/app/skill-repo`) as a zip; the archive contains the skill directory at its root
   - `POST /skills/execute` - Execute a skill by name

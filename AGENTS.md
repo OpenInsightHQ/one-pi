@@ -145,6 +145,52 @@ Sessions are multi-tenant: keyed by `agentId + sessionId`, with per-user working
 - Chunked file uploads use a 3-step flow: `/files/upload/init` → `/files/upload/chunk` → `/files/upload/complete`, with 24-hour session expiry.
 - Upload limits are configurable via `HttpServerOptions.uploadLimits` (default: 100MB per file, 500MB total).
 
+## MongoDB Data Layer (packages/coding-agent)
+
+The coding agent integrates with MongoDB to share data with the arp (LibreChat) system. Source files are in `packages/coding-agent/src/core/mongo/`:
+
+- `db.ts` — Connection manager (`connectMongo`, `getDb`, `isMongoEnabled`, `disconnectMongo`). Cached singleton, graceful fallback when `MONGO_URI` is unset (personal-skills-only mode).
+- `types.ts` — Constants (`PrincipalType`, `ResourceType`, `PermissionBits`, `RoleBits`), `hasPermissions()` helper, document interfaces matching the on-disk shape written by the Java/yudao backend.
+- `schemas.ts` — Mongoose schemas for `skills`, `accessroles`, `aclentries`, `userroles`, `roles` collections. All `{ strict: false }` to preserve `_class`/`__v` fields from the Java backend.
+- `models.ts` — Lazy model accessors (`getSkillModel`, `getAclEntryModel`, etc.).
+- `acl.ts` — ACL service: `resolveUserPrincipals` (user → [USER, ROLE..., PUBLIC]), `checkPermission`, `findAccessibleResourceIds`, `getEffectivePermissions`.
+- `skill-catalog.ts` — `getAuthorizedSkillDirs`, `getAuthorizedSkills`, `checkSkillPermission`, `filterAuthorizedSkillNames`.
+- `index.ts` — Public API barrel export.
+
+### Environment variables
+
+- `MONGO_URI` — MongoDB connection string (shared with arp/LibreChat). When unset, authorized skills and ACL are disabled; pi runs in personal-skills-only mode.
+- Optional pool tuning: `MONGO_MAX_POOL_SIZE`, `MONGO_MIN_POOL_SIZE`, `MONGO_MAX_CONNECTING`, `MONGO_MAX_IDLE_TIME_MS`, `MONGO_WAIT_QUEUE_TIMEOUT_MS`, `MONGO_AUTO_INDEX`, `MONGO_AUTO_CREATE`.
+
+### Skill permission model
+
+Skills come from two sources:
+
+1. **Authorized skills** — fetched from MongoDB `skills` collection, filtered by ACL. The `X-User-Id` request header (MongoDB User ObjectId hex string) identifies the user. Skill files live on disk at the `savePath` recorded in the database.
+2. **Personal skills** — stored in `~/.pi/agent/sessions/<userId>/skills/`. No ACL check.
+
+ACL resolution (mirrors arp/LibreChat):
+
+1. Resolve user → principals: `[USER, ROLE..., PUBLIC]` (roles resolved via `userroles` + `roles` collections).
+2. Build MongoDB `$or` query from principals (PUBLIC has no `principalId`).
+3. Query `aclentries` with `permBits: { $bitsAllSet: required }` for bitmask check.
+
+`principalType` can be `public` (everyone), `user` (personal grant), `role` (role-based grant), or `group`. `resourceType=skill` for skill permissions.
+
+**Mandatory enforcement**: skill execution endpoints (`POST /skills/execute`, `POST /skills/:name/execute`, `GET /skills/:name`) call `enforceSkillPermission()` before any cataloged skill access. `GET /skills` filters the listing by ACL. Failure modes: 503 (DB error), 401 (missing `X-User-Id`), 403 (denied). Non-catalog skills (personal/local) bypass the check.
+
+### Adding a new MongoDB collection
+
+To add a future collection (e.g. `messages`, `conversations`, `systemprompts`):
+
+1. Add a document interface in `types.ts`
+2. Add a Mongoose schema in `schemas.ts`
+3. Add a `get<Name>Model()` accessor in `models.ts`
+4. Create a service file (e.g. `message-service.ts`) with business logic
+5. Re-export the public API in `index.ts`
+
+All collections share the same connection (see `db.ts`). Use `{ strict: false }` on schemas to preserve fields written by the Java backend.
+
 ## Style
 
 - Keep answers short and concise

@@ -1,0 +1,213 @@
+import { existsSync } from "node:fs";
+import { checkPermission, findAccessibleResourceIds } from "./acl.js";
+import { getDb, isMongoEnabled } from "./db.js";
+import { getSkillModel } from "./models.js";
+import type { SkillDoc } from "./types.js";
+import { PermissionBits, type Principal, ResourceType } from "./types.js";
+
+/**
+ * Skill catalog service.
+ *
+ * Bridges the MongoDB `skills` collection (metadata + ACL) with pi's on-disk
+ * skill loader. Authorized skills are fetched from MongoDB and filtered by
+ * the user's ACL permissions; their `SKILL.md` files live on disk at the
+ * `savePath` recorded in the database.
+ */
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface AuthorizedSkill {
+	id: string;
+	name: string;
+	displayName?: string;
+	description?: string;
+	category?: string;
+	savePath: string;
+	skillType?: string;
+	status?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Converts a raw MongoDB skill document to the {@link AuthorizedSkill} shape,
+ * skipping entries whose `savePath` doesn't exist on disk.
+ */
+function toAuthorizedSkill(doc: SkillDoc): AuthorizedSkill | null {
+	const savePath = doc.savePath;
+	if (!savePath || !existsSync(savePath)) {
+		return null;
+	}
+	return {
+		id: doc._id.toString(),
+		name: doc.name,
+		displayName: doc.displayName,
+		description: doc.description,
+		category: doc.category,
+		savePath,
+		skillType: doc.skillType,
+		status: doc.status,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the on-disk skill directories (`savePath`) that `userId` is
+ * authorized to use. These paths can be passed directly to pi's
+ * `DefaultResourceLoader` as `additionalSkillPaths`.
+ *
+ * Authorization is checked via ACL: only skills the user has VIEW permission
+ * on are included.
+ */
+export async function getAuthorizedSkillDirs(userId: string): Promise<string[]> {
+	if (!isMongoEnabled()) return [];
+
+	const skills = await getAuthorizedSkills(userId);
+	return skills.map((s) => s.savePath);
+}
+
+/**
+ * Returns full metadata for all skills the user is authorized to use.
+ * Only active (status=1) skills with an existing `savePath` are returned.
+ */
+export async function getAuthorizedSkills(userId: string): Promise<AuthorizedSkill[]> {
+	if (!isMongoEnabled()) return [];
+	await getDb();
+
+	// 1. Find all skill resourceIds the user can access
+	const accessibleIds = await findAccessibleResourceIds(userId, ResourceType.SKILL, PermissionBits.VIEW);
+	if (accessibleIds.length === 0) return [];
+
+	// 2. Load skill metadata, filter by status and disk existence
+	const Skill = getSkillModel();
+	const docs: SkillDoc[] = await Skill.find({
+		_id: { $in: accessibleIds },
+		status: 1,
+	})
+		.lean()
+		.exec();
+
+	const results: AuthorizedSkill[] = [];
+	for (const doc of docs) {
+		const skill = toAuthorizedSkill(doc);
+		if (skill) results.push(skill);
+	}
+	return results;
+}
+
+/**
+ * Returns ALL active skills from MongoDB (without ACL filtering).
+ * Used for admin/listing endpoints that show all skills regardless of permission.
+ */
+export async function getAllActiveSkills(): Promise<AuthorizedSkill[]> {
+	if (!isMongoEnabled()) return [];
+	await getDb();
+
+	const Skill = getSkillModel();
+	const docs: SkillDoc[] = await Skill.find({ status: 1 }).lean().exec();
+
+	const results: AuthorizedSkill[] = [];
+	for (const doc of docs) {
+		const skill = toAuthorizedSkill(doc);
+		if (skill) results.push(skill);
+	}
+	return results;
+}
+
+/**
+ * Returns the skill _id (as a hex string) for a given skill name, or null
+ * if the skill is not found in the MongoDB catalog.
+ *
+ * Used by execution-endpoint guards to resolve skill name → resourceId
+ * before checking permissions.
+ */
+export async function getSkillIdByName(skillName: string): Promise<string | null> {
+	if (!isMongoEnabled()) return null;
+	await getDb();
+
+	const Skill = getSkillModel();
+	const doc = await Skill.findOne({ name: skillName, status: 1 }).select("_id").lean().exec();
+	return doc ? doc._id.toString() : null;
+}
+
+/**
+ * Checks whether `userId` has VIEW permission on the named skill.
+ *
+ * This is the **mandatory permission gate** called before any authorized
+ * skill execution. Returns true if:
+ *   - MongoDB is not configured (personal-skills-only mode — no ACL), OR
+ *   - The skill is not in the MongoDB catalog (it's a personal/local skill), OR
+ *   - The user has an ACL grant with VIEW permission on the skill.
+ *
+ * Returns false only when the skill IS in the catalog AND the user lacks
+ * permission.
+ */
+export async function checkSkillPermission(userId: string, skillName: string): Promise<boolean> {
+	if (!isMongoEnabled()) return true;
+
+	const skillId = await getSkillIdByName(skillName);
+	if (!skillId) return true; // Not a MongoDB-cataloged skill → no ACL check
+
+	return checkPermission(userId, ResourceType.SKILL, skillId, PermissionBits.VIEW);
+}
+
+/**
+ * Filters a list of skill names, keeping only those the user is authorized to
+ * access. Non-catalog skills (personal/local) are always kept. Uses a single
+ * batch query to avoid N individual permission checks.
+ *
+ * @param userId    MongoDB User ObjectId hex string (null → no filtering)
+ * @param skillNames  List of skill names to filter
+ * @returns Set of skill names that should be visible to the user
+ */
+export async function filterAuthorizedSkillNames(userId: string | null, skillNames: string[]): Promise<Set<string>> {
+	if (!isMongoEnabled() || skillNames.length === 0) {
+		return new Set(skillNames);
+	}
+
+	// Batch-load all catalog skill names + the user's authorized skill names
+	const Skill = getSkillModel();
+	await getDb();
+
+	const catalogDocs = await Skill.find({ name: { $in: skillNames }, status: 1 })
+		.select("name")
+		.lean()
+		.exec();
+	const catalogNames = new Set(catalogDocs.map((d) => d.name));
+
+	if (userId) {
+		const authorized = await getAuthorizedSkills(userId);
+		const authorizedNames = new Set(authorized.map((s) => s.name));
+
+		const result = new Set<string>();
+		for (const name of skillNames) {
+			// Keep if NOT in catalog (personal skill) OR in authorized set
+			if (!catalogNames.has(name) || authorizedNames.has(name)) {
+				result.add(name);
+			}
+		}
+		return result;
+	}
+
+	// No userId but MongoDB enabled — only show non-catalog skills
+	const result = new Set<string>();
+	for (const name of skillNames) {
+		if (!catalogNames.has(name)) {
+			result.add(name);
+		}
+	}
+	return result;
+}
+
+// ---------------------------------------------------------------------------
+// Principal re-exports (convenience for callers that need both)
+// ---------------------------------------------------------------------------
+
+export type { Principal };
