@@ -6,10 +6,11 @@ import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { getAgentDir, getSessionsDir } from "../config.js";
 import type { AgentSession } from "./agent-session.js";
-import { getAuthorizedSkillDirs } from "./mongo/index.js";
+import { checkSkillPermission, getAuthorizedSkillDirs } from "./mongo/index.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
 import type { CreateAgentSessionOptions } from "./sdk.js";
+import type { PathGuard } from "./tools/path-utils.js";
 
 export interface SessionStore {
 	sessions: Map<string, Map<string, AgentSession>>;
@@ -223,6 +224,32 @@ export async function createHttpResourceLoader(userId: string, cwd: string): Pro
 	const loader = new DefaultResourceLoader({ cwd, agentDir, additionalSkillPaths });
 	await loader.reload();
 	return loader;
+}
+
+/**
+ * Creates a {@link PathGuard} that enforces per-user skill ACLs on paths under
+ * {@link SKILL_REPO_BASE_DIR}. Paths outside the skill repo are always allowed.
+ *
+ * The skill directory name is extracted from the path structure
+ * `SKILL_REPO_BASE_DIR/<category>/<skillDirName>/...` and checked via
+ * {@link checkSkillPermission}. Non-catalog skills are allowed (personal/local).
+ */
+export function createSkillPathGuard(userId: string): PathGuard {
+	const normalizedBase = resolvePath(SKILL_REPO_BASE_DIR);
+	return async (absolutePath: string): Promise<void> => {
+		const normalizedPath = resolvePath(absolutePath);
+		if (normalizedPath !== normalizedBase && !normalizedPath.startsWith(normalizedBase + sep)) {
+			return;
+		}
+		const relative = normalizedPath.slice(normalizedBase.length + 1);
+		const parts = relative.split(/[/\\]/);
+		if (parts.length < 2) return;
+		const skillDirName = parts[1];
+		const allowed = await checkSkillPermission(userId, skillDirName);
+		if (!allowed) {
+			throw new Error(`Access denied to skill "${skillDirName}"`);
+		}
+	};
 }
 
 export function getBaseUrl(): string {

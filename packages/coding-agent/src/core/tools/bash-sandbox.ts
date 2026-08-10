@@ -69,6 +69,20 @@ function extractPathsFromCommand(command: string): string[] {
 	return [...new Set(paths)];
 }
 
+/**
+ * Extract all absolute paths referenced by a command, resolved against `cwd`.
+ * Used by callers that need to inspect paths before execution (e.g. ACL guards).
+ */
+export function extractResolvedPaths(command: string, cwd: string): string[] {
+	const normalizedCwd = resolvePath(cwd);
+	const resolved = new Set<string>();
+	for (const raw of extractPathsFromCommand(command)) {
+		const clean = raw.replace(/^['"]|['"]$/g, "").replace(/^=/, "");
+		if (clean) resolved.add(resolvePath(normalizedCwd, clean));
+	}
+	return [...resolved];
+}
+
 /** Split a command line into segments at shell operators (`;`, `|`, `&`, newline), respecting quotes. */
 function splitCommandSegments(command: string): string[] {
 	const segments: string[] = [];

@@ -39,6 +39,7 @@ import {
 	withFileMutationQueue,
 	writeTool,
 } from "./tools/index.js";
+import type { PathGuard } from "./tools/path-utils.js";
 
 export interface CreateAgentSessionOptions {
 	/** Working directory for project-local discovery. Default: process.cwd() */
@@ -82,6 +83,13 @@ export interface CreateAgentSessionOptions {
 	 * `baseToolsOverride` is not set.
 	 */
 	bashToolOptions?: BashToolOptions;
+
+	/**
+	 * Async path access guard for read/bash tools. Throw to deny access to a
+	 * resolved absolute path. Used by the HTTP API to enforce per-user skill
+	 * ACLs on paths under SKILL_REPO_BASE_DIR.
+	 */
+	skillPathGuard?: PathGuard;
 
 	/** Resource loader. When omitted, DefaultResourceLoader is used. */
 	resourceLoader?: ResourceLoader;
@@ -394,6 +402,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		extensionRunnerRef,
 		allowedRoot: options.allowedRoot,
 		bashToolOptions: options.bashToolOptions,
+		skillPathGuard: options.skillPathGuard,
 	});
 	const extensionsResult = resourceLoader.getExtensions();
 

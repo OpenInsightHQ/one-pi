@@ -2,6 +2,13 @@ import { accessSync, constants, existsSync, realpathSync } from "node:fs";
 import * as os from "node:os";
 import { basename, dirname, isAbsolute, resolve as resolvePath, sep } from "node:path";
 
+/**
+ * Async path access guard. Called with a resolved absolute path before a tool
+ * accesses it. Throw to deny access; return normally to allow. Used by the HTTP
+ * API to enforce per-user skill ACLs on paths under SKILL_REPO_BASE_DIR.
+ */
+export type PathGuard = (absolutePath: string) => Promise<void>;
+
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const NARROW_NO_BREAK_SPACE = "\u202F";
 function normalizeUnicodeSpaces(str: string): string {

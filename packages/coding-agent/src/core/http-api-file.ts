@@ -20,6 +20,7 @@ import {
 	cleanExpiredUploadSessions,
 	createDmpSpawnHook,
 	createHttpResourceLoader,
+	createSkillPathGuard,
 	defaultHttpModel,
 	getHttpSkillAgentTools,
 	getMimeType,
@@ -130,6 +131,7 @@ export async function handleUpload(req: IncomingMessage, res: ServerResponse): P
 				forceModel: true,
 				resourceLoader,
 				authStorage,
+				skillPathGuard: createSkillPathGuard(userId),
 			};
 			const result = await createAgentSession(options);
 			session = result.session;

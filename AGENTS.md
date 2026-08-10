@@ -177,7 +177,13 @@ ACL resolution (mirrors arp/LibreChat):
 
 `principalType` can be `public` (everyone), `user` (personal grant), `role` (role-based grant), or `group`. `resourceType=skill` for skill permissions.
 
-**Mandatory enforcement**: ACL is enforced on the **model-side skill invocation path** only. When the model processes a prompt (`POST /prompt`, `POST /v1/chat/completions`), `createHttpResourceLoader` loads only ACL-authorized skills via `getAuthorizedSkillDirs(userId)` plus personal skills from `~/.pi/agent/sessions/<userId>/skills/`. These filtered skills are injected into `<available_skills>` in the system prompt — the model can only see and invoke authorized skills. Management endpoints (`GET /skills`, `POST /skills/execute`, `POST /skills/:name/execute`, `GET /skills/:name`) do NOT perform ACL checks; they are admin/management interfaces with unrestricted access to the full skill-repo listing.
+**Mandatory enforcement**: ACL is enforced on the **model-side skill invocation path** via two complementary mechanisms:
+
+1. **Visibility filter** — `createHttpResourceLoader` loads only ACL-authorized skills via `getAuthorizedSkillDirs(userId)` plus personal skills from `~/.pi/agent/sessions/<userId>/skills/`. These filtered skills are injected into `<available_skills>` in the system prompt — the model can only see authorized skills.
+
+2. **Runtime path guard** — `createSkillPathGuard(userId)` is injected into the `read` and `bash` tools via `CreateAgentSessionOptions.skillPathGuard`. When the model resolves any path under `SKILL_REPO_BASE_DIR`, the guard extracts the skill directory name and checks `checkSkillPermission(userId, skillName)`. This prevents the model from reading SKILL.md or executing scripts of unauthorized skills even if the user provides the exact path.
+
+Both mechanisms apply to model-side paths (`POST /prompt`, `POST /v1/chat/completions`, file-processing sessions). Management endpoints (`GET /skills`, `POST /skills/execute`, `POST /skills/:name/execute`, `GET /skills/:name`) do NOT perform ACL checks; they are admin/management interfaces with unrestricted access to the full skill-repo listing.
 
 ### Adding a new MongoDB collection
 

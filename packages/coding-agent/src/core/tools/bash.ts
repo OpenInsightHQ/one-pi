@@ -12,7 +12,8 @@ import { theme } from "../../modes/interactive/theme/theme.js";
 import { waitForChildProcess } from "../../utils/child-process.js";
 import { getShellConfig, getShellEnv, killProcessTree } from "../../utils/shell.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
-import { validateCommandSandbox } from "./bash-sandbox.js";
+import { extractResolvedPaths, validateCommandSandbox } from "./bash-sandbox.js";
+import type { PathGuard } from "./path-utils.js";
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateTail } from "./truncate.js";
@@ -162,6 +163,13 @@ export interface BashToolOptions {
 	 * scripts that write into the user's skill directory.
 	 */
 	allowedRoot?: string;
+	/**
+	 * Async guard invoked after sandbox validation but before command execution.
+	 * Called with each resolved absolute path extracted from the command. Throw
+	 * to deny; return normally to allow. Used by the HTTP API to enforce per-user
+	 * skill ACLs.
+	 */
+	skillPathGuard?: PathGuard;
 }
 
 const BASH_PREVIEW_LINES = 5;
@@ -282,6 +290,7 @@ export function createBashToolDefinition(
 	const commandPrefix = options?.commandPrefix;
 	const spawnHook = options?.spawnHook;
 	const allowedRoot = options?.allowedRoot;
+	const skillPathGuard = options?.skillPathGuard;
 	return {
 		name: "bash",
 		label: "bash",
@@ -300,6 +309,17 @@ export function createBashToolDefinition(
 				const sandboxError = validateCommandSandbox(command, cwd, allowedRoot);
 				if (sandboxError) {
 					return { content: [{ type: "text" as const, text: sandboxError }], details: undefined };
+				}
+			}
+			if (skillPathGuard) {
+				const resolvedPaths = extractResolvedPaths(command, cwd);
+				for (const p of resolvedPaths) {
+					try {
+						await skillPathGuard(p);
+					} catch (error) {
+						const msg = error instanceof Error ? error.message : String(error);
+						return { content: [{ type: "text" as const, text: msg }], details: undefined };
+					}
 				}
 			}
 			const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;

@@ -7,6 +7,7 @@ import { AuthStorage } from "./auth-storage.js";
 import {
 	createDmpSpawnHook,
 	createHttpResourceLoader,
+	createSkillPathGuard,
 	defaultHttpModel,
 	getBaseUrl,
 	getHttpSkillAgentTools,
@@ -142,6 +143,7 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 				forceModel: true,
 				resourceLoader,
 				authStorage,
+				skillPathGuard: createSkillPathGuard(userId),
 			};
 			const result = await createAgentSession(options);
 			session = result.session;
@@ -432,6 +434,7 @@ export async function handleChatCompletions(req: IncomingMessage, res: ServerRes
 				forceModel: true,
 				resourceLoader,
 				authStorage,
+				skillPathGuard: createSkillPathGuard(userId),
 			};
 
 			const result = await createAgentSession(options);

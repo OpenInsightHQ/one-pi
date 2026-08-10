@@ -80,6 +80,7 @@ import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import type { BashOperations, BashToolOptions } from "./tools/bash.js";
 import { createAllToolDefinitions } from "./tools/index.js";
+import type { PathGuard } from "./tools/path-utils.js";
 import { createToolDefinitionFromAgentTool, wrapToolDefinition } from "./tools/tool-definition-wrapper.js";
 
 // ============================================================================
@@ -160,6 +161,12 @@ export interface AgentSessionConfig {
 	allowedRoot?: string;
 	/** Options for the built-in bash tool (merged with shell command prefix). */
 	bashToolOptions?: BashToolOptions;
+	/**
+	 * Async path access guard for read/bash tools. Throw to deny access to a
+	 * resolved absolute path. Used by the HTTP API to enforce per-user skill
+	 * ACLs on paths under SKILL_REPO_BASE_DIR.
+	 */
+	skillPathGuard?: PathGuard;
 	/** Mutable ref used by Agent to access the current ExtensionRunner */
 	extensionRunnerRef?: { current?: ExtensionRunner };
 }
@@ -281,6 +288,7 @@ export class AgentSession {
 	private _baseToolsOverride?: Record<string, AgentTool>;
 	private _allowedRoot?: string;
 	private _bashToolOptions?: BashToolOptions;
+	private _skillPathGuard?: PathGuard;
 	private _extensionUIContext?: ExtensionUIContext;
 	private _extensionCommandContextActions?: ExtensionCommandContextActions;
 	private _extensionShutdownHandler?: ShutdownHandler;
@@ -313,6 +321,7 @@ export class AgentSession {
 		this._baseToolsOverride = config.baseToolsOverride;
 		this._allowedRoot = config.allowedRoot;
 		this._bashToolOptions = config.bashToolOptions;
+		this._skillPathGuard = config.skillPathGuard;
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, extensions, auto-compaction, retry logic)
@@ -2315,10 +2324,11 @@ export class AgentSession {
 					]),
 				)
 			: createAllToolDefinitions(this._cwd, {
-					read: { autoResizeImages },
+					read: { autoResizeImages, skillPathGuard: this._skillPathGuard },
 					bash: {
 						commandPrefix: shellCommandPrefix,
 						...this._bashToolOptions,
+						skillPathGuard: this._skillPathGuard,
 						// allowedRoot is applied to every tool uniformly via the top-level option.
 					},
 					allowedRoot: this._allowedRoot,

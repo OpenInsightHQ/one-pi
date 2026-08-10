@@ -9,7 +9,7 @@ import { getLanguageFromPath, highlightCode } from "../../modes/interactive/them
 import { formatDimensionNote, resizeImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
-import { resolveReadPath } from "./path-utils.js";
+import { type PathGuard, resolveReadPath } from "./path-utils.js";
 import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
@@ -56,6 +56,12 @@ export interface ReadToolOptions {
 	 * than cwd to allow reading a parent tree (e.g. a user's session directory).
 	 */
 	allowedRoot?: string;
+	/**
+	 * Async guard invoked after path resolution but before file access.
+	 * Throw to deny; return normally to allow. Used by the HTTP API to enforce
+	 * per-user skill ACLs.
+	 */
+	skillPathGuard?: PathGuard;
 }
 
 function formatReadCall(
@@ -124,6 +130,7 @@ export function createReadToolDefinition(
 	const autoResizeImages = options?.autoResizeImages ?? true;
 	const ops = options?.operations ?? defaultReadOperations;
 	const allowedRoot = options?.allowedRoot;
+	const skillPathGuard = options?.skillPathGuard;
 	return {
 		name: "read",
 		label: "read",
@@ -154,6 +161,10 @@ export function createReadToolDefinition(
 
 					(async () => {
 						try {
+							if (skillPathGuard) {
+								await skillPathGuard(absolutePath);
+							}
+							if (aborted) return;
 							// Check if file exists and is readable.
 							await ops.access(absolutePath);
 							if (aborted) return;
