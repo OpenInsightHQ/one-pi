@@ -177,7 +177,7 @@ ACL resolution (mirrors arp/LibreChat):
 
 `principalType` can be `public` (everyone), `user` (personal grant), `role` (role-based grant), or `group`. `resourceType=skill` for skill permissions.
 
-**Mandatory enforcement**: skill execution endpoints (`POST /skills/execute`, `POST /skills/:name/execute`, `GET /skills/:name`) call `enforceSkillPermission()` before any cataloged skill access. `GET /skills` returns the full skill-repo listing without ACL filtering; visibility is not restricted on the listing endpoint. Failure modes: 503 (DB error), 401 (missing `X-User-Id`), 403 (denied). Non-catalog skills (personal/local) bypass the check.
+**Mandatory enforcement**: ACL is enforced on the **model-side skill invocation path** only. When the model processes a prompt (`POST /prompt`, `POST /v1/chat/completions`), `createHttpResourceLoader` loads only ACL-authorized skills via `getAuthorizedSkillDirs(userId)` plus personal skills from `~/.pi/agent/sessions/<userId>/skills/`. These filtered skills are injected into `<available_skills>` in the system prompt — the model can only see and invoke authorized skills. Management endpoints (`GET /skills`, `POST /skills/execute`, `POST /skills/:name/execute`, `GET /skills/:name`) do NOT perform ACL checks; they are admin/management interfaces with unrestricted access to the full skill-repo listing.
 
 ### Adding a new MongoDB collection
 
