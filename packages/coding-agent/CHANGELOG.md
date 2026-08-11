@@ -4,6 +4,7 @@
 
 ### Added
 
+- `PUT /model` now accepts optional `contextWindow` and `maxTokens` fields, and `GET /model` returns them. Previously these were hardcoded to 128000 and 16384 respectively, which caused auto-compaction to use the wrong threshold for custom models routed through proxies like litellm — the real model limit was never known to pi, so compaction did not trigger in time and requests failed with `ContextWindowExceededError`. Both fields default to their previous values when omitted, so existing callers are unaffected.
 - MongoDB integration for authorized skills and ACL permission checks, shared with the arp (LibreChat) system. Configured via `MONGO_URI` env var. When unset, pi runs in personal-skills-only mode.
 - Skill permissions are split into two sources: (1) **authorized skills** fetched from MongoDB `skills` collection and filtered by ACL (`aclentries` + `accessroles` tables), and (2) **personal skills** from the user's local `~/.pi/agent/sessions/<userId>/skills` directory.
 - MongoDB data-layer framework (`packages/coding-agent/src/core/mongo/`) with Mongoose schemas, models, and services for `skills`, `accessroles`, `aclentries`, `userroles`, and `roles` collections. Designed for extensibility — adding future collections (messages, conversations, systemprompts) requires only adding a schema + model + service file.

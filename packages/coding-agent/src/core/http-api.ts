@@ -174,7 +174,12 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 		if (!defaultHttpModel) {
 			sendJson(res, 200, { provider: "", model: "" });
 		} else {
-			sendJson(res, 200, { provider: defaultHttpModel.provider, model: defaultHttpModel.id });
+			sendJson(res, 200, {
+				provider: defaultHttpModel.provider,
+				model: defaultHttpModel.id,
+				contextWindow: defaultHttpModel.contextWindow,
+				maxTokens: defaultHttpModel.maxTokens,
+			});
 		}
 		return;
 	}
@@ -187,6 +192,13 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 		}
 		if (!body.apiKey) {
 			sendError(res, 400, "Missing apiKey in request body");
+			return;
+		}
+		if (
+			(body.contextWindow !== undefined && (!Number.isFinite(body.contextWindow) || body.contextWindow <= 0)) ||
+			(body.maxTokens !== undefined && (!Number.isFinite(body.maxTokens) || body.maxTokens <= 0))
+		) {
+			sendError(res, 400, "contextWindow and maxTokens must be positive numbers");
 			return;
 		}
 
@@ -210,7 +222,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 		}
 
 		console.log(
-			`[HTTP] Model updated: ${body.provider}/${body.model}, api=${newModel.api}, baseUrl=${newModel.baseUrl}`,
+			`[HTTP] Model updated: ${body.provider}/${body.model}, api=${newModel.api}, baseUrl=${newModel.baseUrl}, contextWindow=${newModel.contextWindow}, maxTokens=${newModel.maxTokens}`,
 		);
 		sendJson(res, 200, {
 			success: true,
@@ -218,6 +230,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 			model: body.model,
 			api: newModel.api,
 			baseUrl: newModel.baseUrl,
+			contextWindow: newModel.contextWindow,
+			maxTokens: newModel.maxTokens,
 		});
 		return;
 	}

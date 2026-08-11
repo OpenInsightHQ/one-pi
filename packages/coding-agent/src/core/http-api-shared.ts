@@ -79,6 +79,8 @@ export interface HttpModelConfig {
 	baseUrl: string;
 	provider: string;
 	model: string;
+	contextWindow?: number;
+	maxTokens?: number;
 }
 
 export let httpModelConfig: HttpModelConfig | undefined;
@@ -135,8 +137,8 @@ export function buildModelFromConfig(config: HttpModelConfig, fallbackBaseUrl?: 
 		reasoning: false,
 		input: ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 128000,
-		maxTokens: 16384,
+		contextWindow: config.contextWindow ?? 128000,
+		maxTokens: config.maxTokens ?? 16384,
 	};
 }
 
