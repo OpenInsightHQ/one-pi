@@ -2091,6 +2091,8 @@ interface RepoSkillInfo {
 	description: string;
 	category: string;
 	path: string;
+	createdAt: string;
+	updatedAt: string;
 }
 
 interface RepoSkillDetail extends RepoSkillInfo {
@@ -2467,6 +2469,14 @@ function loadSkillPathsFromSettings(): string[] {
 	}
 }
 
+function formatTimestamp(date: Date): string {
+	const pad = (n: number) => String(n).padStart(2, "0");
+	return (
+		`${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+		`${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+	);
+}
+
 function loadRepoSkills(): RepoSkillInfo[] {
 	const skills: RepoSkillInfo[] = [];
 	if (!existsSync(SKILL_REPO_BASE_DIR)) {
@@ -2484,6 +2494,9 @@ function loadRepoSkills(): RepoSkillInfo[] {
 				const skillPath = join(categoryPath, skillDir.name);
 				const skillMdPath = join(skillPath, "SKILL.md");
 				if (!existsSync(skillMdPath)) continue;
+				const stat = statSync(skillPath);
+				const createdAt = formatTimestamp(stat.birthtime);
+				const updatedAt = formatTimestamp(stat.mtime);
 				try {
 					const content = readFileSync(skillMdPath, "utf-8");
 					const { frontmatter } = parseFrontmatter<SkillFrontmatter>(content);
@@ -2492,6 +2505,8 @@ function loadRepoSkills(): RepoSkillInfo[] {
 						description: frontmatter.description || "",
 						category: category.name,
 						path: skillPath,
+						createdAt,
+						updatedAt,
 					});
 				} catch {
 					skills.push({
@@ -2499,6 +2514,8 @@ function loadRepoSkills(): RepoSkillInfo[] {
 						description: "",
 						category: category.name,
 						path: skillPath,
+						createdAt,
+						updatedAt,
 					});
 				}
 			}
@@ -2534,11 +2551,14 @@ function loadRepoSkillDetail(skillName: string): RepoSkillDetail | null {
 
 				const apisJsonPath = join(skillPath, "apis.json");
 				const scriptPath = join(skillPath, "scripts", "main.py");
+				const stat = statSync(skillPath);
 				const detail: RepoSkillDetail = {
 					name,
 					description,
 					category: category.name,
 					path: skillPath,
+					createdAt: formatTimestamp(stat.birthtime),
+					updatedAt: formatTimestamp(stat.mtime),
 					methods: [],
 					hasScript: existsSync(scriptPath),
 					scriptPath: existsSync(scriptPath) ? scriptPath : undefined,
@@ -2880,16 +2900,25 @@ export async function handleSkills(req: IncomingMessage, res: ServerResponse): P
 	const groupBy = urlObj.searchParams.get("groupBy");
 	const categoryFilter = urlObj.searchParams.get("category");
 
-	const skillInfos: Array<{ name: string; description: string; source: string; scope: string; group?: string }> =
-		loadRepoSkills()
-			.filter((skill) => (categoryFilter ? skill.category === categoryFilter : true))
-			.map((skill) => ({
-				name: skill.name,
-				description: skill.description,
-				source: "repo",
-				scope: "global",
-				group: skill.category,
-			}));
+	const skillInfos: Array<{
+		name: string;
+		description: string;
+		source: string;
+		scope: string;
+		group?: string;
+		createdAt: string;
+		updatedAt: string;
+	}> = loadRepoSkills()
+		.filter((skill) => (categoryFilter ? skill.category === categoryFilter : true))
+		.map((skill) => ({
+			name: skill.name,
+			description: skill.description,
+			source: "repo",
+			scope: "global",
+			group: skill.category,
+			createdAt: skill.createdAt,
+			updatedAt: skill.updatedAt,
+		}));
 
 	if (groupBy === "category") {
 		const categories: Record<string, typeof skillInfos> = {};
