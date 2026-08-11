@@ -20,6 +20,7 @@ import { exportFromFile } from "./core/export-html/index.js";
 import type { LoadExtensionsResult } from "./core/extensions/index.js";
 import { startHttpServer } from "./core/http-api.js";
 import { loadHttpModelConfig } from "./core/http-api-shared.js";
+import { disconnectMongo } from "./core/mongo/index.js";
 import { migrateKeybindingsConfigFile } from "./core/keybindings.js";
 import { ModelRegistry } from "./core/model-registry.js";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.js";
@@ -908,16 +909,14 @@ export async function main(args: string[]) {
 		stopThemeWatcher();
 		restoreStdout();
 
-		await new Promise<void>((resolve) => {
-			process.on("SIGINT", () => {
-				console.log("\nShutting down HTTP server...");
-				resolve();
-			});
-			process.on("SIGTERM", () => {
-				console.log("\nShutting down HTTP server...");
-				resolve();
-			});
-		});
+		const shutdown = (signal: NodeJS.Signals) => {
+			console.log(`\nReceived ${signal}, shutting down...`);
+			disconnectMongo().finally(() => process.exit(0));
+		};
+		process.on("SIGINT", () => shutdown("SIGINT"));
+		process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+		await new Promise<void>(() => {});
 		return;
 	} else {
 		await runPrintMode(session, {

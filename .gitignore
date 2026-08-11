@@ -36,3 +36,7 @@ packages/coding-agent/binaries/
 todo.md
 plans/
 .pi/
+
+# Local dev launcher (contains API key) and custom provider extension
+run.bat
+qwen-provider.ts
