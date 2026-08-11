@@ -23,7 +23,14 @@ import type {
 	AgentTool,
 	ThinkingLevel,
 } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@mariozechner/pi-ai";
+import type {
+	AssistantMessage,
+	ImageContent,
+	Message,
+	Model,
+	TextContent,
+	ToolResultMessage,
+} from "@mariozechner/pi-ai";
 import { isContextOverflow, modelsAreEqual, resetApiProviders, supportsXhigh } from "@mariozechner/pi-ai";
 import { getDocsPath } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
@@ -70,6 +77,16 @@ import {
 } from "./extensions/index.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
+import {
+	type ConversationPersistenceContext,
+	deriveTitle,
+	getLastMessageId,
+	isMongoEnabled,
+	NO_PARENT,
+	saveConversationToMongo,
+	saveMessageToMongo,
+	updateToolCallOutputInMongo,
+} from "./mongo/index.js";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.js";
 import type { BranchSummaryEntry, CompactionEntry, SessionManager } from "./session-manager.js";
@@ -167,6 +184,8 @@ export interface AgentSessionConfig {
 	 * ACLs on paths under SKILL_REPO_BASE_DIR.
 	 */
 	skillPathGuard?: PathGuard;
+	/** MongoDB conversation persistence context. When set, messages are persisted to MongoDB. */
+	conversationPersistence?: ConversationPersistenceContext;
 	/** Mutable ref used by Agent to access the current ExtensionRunner */
 	extensionRunnerRef?: { current?: ExtensionRunner };
 }
@@ -289,6 +308,9 @@ export class AgentSession {
 	private _allowedRoot?: string;
 	private _bashToolOptions?: BashToolOptions;
 	private _skillPathGuard?: PathGuard;
+	private _conversationPersistence?: ConversationPersistenceContext;
+	private _lastMongoMessageId: string | undefined = undefined;
+	private _mongoParentInitialized = false;
 	private _extensionUIContext?: ExtensionUIContext;
 	private _extensionCommandContextActions?: ExtensionCommandContextActions;
 	private _extensionShutdownHandler?: ShutdownHandler;
@@ -322,6 +344,7 @@ export class AgentSession {
 		this._allowedRoot = config.allowedRoot;
 		this._bashToolOptions = config.bashToolOptions;
 		this._skillPathGuard = config.skillPathGuard;
+		this._conversationPersistence = config.conversationPersistence;
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, extensions, auto-compaction, retry logic)
@@ -505,6 +528,11 @@ export class AgentSession {
 			) {
 				// Regular LLM message - persist as SessionMessageEntry
 				this.sessionManager.appendMessage(event.message);
+
+				// Persist to MongoDB (conversation history)
+				if (this._conversationPersistence && isMongoEnabled()) {
+					await this._persistMessageToMongo(event.message);
+				}
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
@@ -544,6 +572,73 @@ export class AgentSession {
 			this._resolveRetry();
 			await this._checkCompaction(msg);
 		}
+	}
+
+	/**
+	 * Persist a single message to MongoDB conversations/messages collections.
+	 * Maintains parent-child linking via _lastMongoMessageId.
+	 */
+	private async _persistMessageToMongo(message: AgentMessage): Promise<void> {
+		if (!this._conversationPersistence) return;
+
+		try {
+			// Lazy init: fetch last messageId from MongoDB for parent linking
+			if (!this._mongoParentInitialized) {
+				this._lastMongoMessageId = await getLastMessageId(this._conversationPersistence);
+				this._mongoParentInitialized = true;
+			}
+
+			const wasNewConversation = this._lastMongoMessageId === NO_PARENT;
+			const parentMessageId = this._lastMongoMessageId ?? NO_PARENT;
+
+			// ToolResult messages: update the assistant message's tool_call.output
+			// inline (arp format) AND save as a separate document for pi reload
+			if (message.role === "toolResult") {
+				const toolMsg = message as ToolResultMessage;
+				const outputText = this._extractToolResultText(toolMsg);
+				const messageId = await updateToolCallOutputInMongo(
+					this._conversationPersistence,
+					toolMsg.toolCallId,
+					outputText,
+					toolMsg.isError,
+					toolMsg.toolName,
+					parentMessageId,
+				);
+				if (messageId) {
+					this._lastMongoMessageId = messageId;
+				}
+				await saveConversationToMongo(this._conversationPersistence, {});
+				return;
+			}
+
+			// Save message (user, assistant)
+			const messageId = await saveMessageToMongo(this._conversationPersistence, message, parentMessageId);
+			if (messageId) {
+				this._lastMongoMessageId = messageId;
+			}
+
+			// Build conversation update options
+			const convoOptions: { title?: string; finishReason?: string } = {};
+			if (wasNewConversation && message.role === "user") {
+				convoOptions.title = deriveTitle(this._getUserMessageText(message as Message));
+			}
+			if (message.role === "assistant") {
+				convoOptions.finishReason = (message as AssistantMessage).stopReason;
+			}
+
+			await saveConversationToMongo(this._conversationPersistence, convoOptions);
+		} catch (err) {
+			console.error("[MongoDB] Error persisting message:", err);
+		}
+	}
+
+	/** Extract concatenated text from a ToolResultMessage's content. */
+	private _extractToolResultText(message: ToolResultMessage): string {
+		if (typeof message.content === "string") return message.content;
+		return message.content
+			.filter((c): c is TextContent => c.type === "text")
+			.map((c) => c.text)
+			.join("");
 	}
 
 	/** Resolve the pending retry promise */

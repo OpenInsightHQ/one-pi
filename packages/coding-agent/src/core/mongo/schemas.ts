@@ -1,5 +1,13 @@
 import { Schema } from "mongoose";
-import type { AccessRoleDoc, AclEntryDoc, RoleDoc, SkillDoc, UserRoleDoc } from "./types.js";
+import type {
+	AccessRoleDoc,
+	AclEntryDoc,
+	ConversationDoc,
+	MessageDoc,
+	RoleDoc,
+	SkillDoc,
+	UserRoleDoc,
+} from "./types.js";
 
 /**
  * Mongoose schemas for the ACL / skill collections.
@@ -99,3 +107,61 @@ export const roleSchema = new Schema<RoleDoc>(
 	{ strict: false, timestamps: true, collection: "roles" },
 );
 roleSchema.index({ name: 1 });
+
+// ---------------------------------------------------------------------------
+// messages (shared with arp/LibreChat)
+// ---------------------------------------------------------------------------
+
+export const messageSchema = new Schema<MessageDoc>(
+	{
+		messageId: { type: String, required: true },
+		conversationId: { type: String, required: true },
+		user: { type: String, required: true },
+		model: { type: String, default: null },
+		endpoint: { type: String },
+		parentMessageId: { type: String },
+		tokenCount: { type: Number },
+		inputTokenCount: { type: Number },
+		sender: { type: String },
+		text: { type: String },
+		streamLog: { type: String },
+		isCreatedByUser: { type: Boolean, default: false },
+		unfinished: { type: Boolean, default: false },
+		error: { type: Boolean, default: false },
+		finish_reason: { type: String },
+		recursionLimit: { type: String },
+		content: { type: [Schema.Types.Mixed], default: undefined },
+		attachments: { type: [Schema.Types.Mixed], default: undefined },
+		files: { type: [Schema.Types.Mixed], default: undefined },
+		expiredAt: { type: Date },
+		agentMessage: { type: Schema.Types.Mixed },
+	},
+	{ strict: false, timestamps: true, collection: "messages" },
+);
+
+// ---------------------------------------------------------------------------
+// conversations (shared with arp/LibreChat)
+// ---------------------------------------------------------------------------
+
+export const conversationSchema = new Schema<ConversationDoc>(
+	{
+		conversationId: { type: String, required: true },
+		user: { type: String },
+		messages: [{ type: Schema.Types.ObjectId, ref: "Message" }],
+		title: { type: String, default: "New Chat" },
+		endpoint: { type: String },
+		endpointType: { type: String },
+		model: { type: String },
+		agent_id: { type: String },
+		isArchived: { type: Boolean, default: false },
+		tags: { type: [String], default: [] },
+		files: { type: [String] },
+		maxContextTokens: { type: Number },
+		resendFiles: { type: Boolean },
+		toolCallVisible: { type: Boolean },
+		finish_reason: { type: String },
+		cwd: { type: String },
+		expiredAt: { type: Date },
+	},
+	{ strict: false, timestamps: true, collection: "conversations" },
+);

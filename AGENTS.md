@@ -150,17 +150,34 @@ Sessions are multi-tenant: keyed by `agentId + sessionId`, with per-user working
 The coding agent integrates with MongoDB to share data with the arp (LibreChat) system. Source files are in `packages/coding-agent/src/core/mongo/`:
 
 - `db.ts` — Connection manager (`connectMongo`, `getDb`, `isMongoEnabled`, `disconnectMongo`). Cached singleton, graceful fallback when `MONGO_URI` is unset (personal-skills-only mode).
-- `types.ts` — Constants (`PrincipalType`, `ResourceType`, `PermissionBits`, `RoleBits`), `hasPermissions()` helper, document interfaces matching the on-disk shape written by the Java/yudao backend.
-- `schemas.ts` — Mongoose schemas for `skills`, `accessroles`, `aclentries`, `userroles`, `roles` collections. All `{ strict: false }` to preserve `_class`/`__v` fields from the Java backend.
-- `models.ts` — Lazy model accessors (`getSkillModel`, `getAclEntryModel`, etc.).
+- `types.ts` — Constants (`PrincipalType`, `ResourceType`, `PermissionBits`, `RoleBits`), `hasPermissions()` helper, document interfaces matching the on-disk shape written by the Java/yudao backend. Also includes `MessageDoc` and `ConversationDoc` for the conversation history collections.
+- `schemas.ts` — Mongoose schemas for `skills`, `accessroles`, `aclentries`, `userroles`, `roles`, `messages`, `conversations` collections. All `{ strict: false }` to preserve `_class`/`__v` fields from the Java backend.
+- `models.ts` — Lazy model accessors (`getSkillModel`, `getAclEntryModel`, `getMessageModel`, `getConversationModel`, etc.).
 - `acl.ts` — ACL service: `resolveUserPrincipals` (user → [USER, ROLE..., PUBLIC]), `checkPermission`, `findAccessibleResourceIds`, `getEffectivePermissions`.
 - `skill-catalog.ts` — `getAuthorizedSkillDirs`, `getAuthorizedSkills`, `checkSkillPermission`, `filterAuthorizedSkillNames`.
+- `conversation-service.ts` — Conversation history persistence: `saveMessageToMongo`, `saveConversationToMongo`, `loadConversationMessages`, `getLastMessageId`. Stores user/assistant/toolResult messages with arp-compatible fields plus a full `agentMessage` field for context reconstruction.
 - `index.ts` — Public API barrel export.
 
 ### Environment variables
 
-- `MONGO_URI` — MongoDB connection string (shared with arp/LibreChat). When unset, authorized skills and ACL are disabled; pi runs in personal-skills-only mode.
+- `MONGO_URI` — MongoDB connection string (shared with arp/LibreChat). When unset, authorized skills, ACL, and conversation persistence are disabled; pi runs in personal-skills-only mode with JSONL-only history.
 - Optional pool tuning: `MONGO_MAX_POOL_SIZE`, `MONGO_MIN_POOL_SIZE`, `MONGO_MAX_CONNECTING`, `MONGO_MAX_IDLE_TIME_MS`, `MONGO_WAIT_QUEUE_TIMEOUT_MS`, `MONGO_AUTO_INDEX`, `MONGO_AUTO_CREATE`.
+
+### Conversation history persistence
+
+Pi persists conversation history (user messages, assistant responses, tool results) to the `conversations` and `messages` MongoDB collections, shared with the arp (LibreChat) system. The `conversationId` uses the API-provided `sessionId`.
+
+**Write path**: On each `message_end` event for user/assistant/toolResult messages (`agent-session.ts:_processAgentEvent`), the message is saved to MongoDB via `saveMessageToMongo()` and also written to JSONL (dual-write for backup). The conversation record is updated via `saveConversationToMongo()` with re-linked message ObjectIds. Writes are fire-and-forget with error logging.
+
+**Read path**: On `createAgentSession()` (`sdk.ts`), if `conversationPersistence` is set and MongoDB is enabled, messages are loaded from MongoDB as the primary source. If MongoDB has data, JSONL entries are cleared first to avoid duplicates. This means pi always uses MongoDB as the source of truth when available.
+
+**Bidirectional arp compatibility**: Messages written by pi include both arp-compatible fields and a full `agentMessage` field. Messages written by arp/LibreChat (no `agentMessage` field) are reverse-constructed from arp fields (`isCreatedByUser` → role, `text`/`content` array → message content) so pi can continue conversations started in LibreChat with the same `conversationId`.
+
+**Document structure**:
+- `messages` collection: arp-compatible fields (`messageId`, `conversationId`, `user`, `parentMessageId`, `sender`, `text`, `content`, `tokenCount`, `inputTokenCount`, `finish_reason`, `endpoint`, `model`, `isCreatedByUser`) plus a `agentMessage` field containing the full pi `AgentMessage` object for context reconstruction.
+- `conversations` collection: arp-compatible fields (`conversationId`, `user`, `messages`, `endpoint`, `endpointType`, `agent_id`, `model`, `title`, `tags`, `files`, `finish_reason`) plus a `cwd` field for the working directory.
+
+Constants: `endpoint: "pi"`, `endpointType: "pi"`, `model: "one-pi"`, `agent_id: "pi__one-pi___one-pi"`.
 
 ### Skill permission model
 

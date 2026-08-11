@@ -771,6 +771,19 @@ export class SessionManager {
 		return this.persist;
 	}
 
+	/**
+	 * Clear all session entries (messages, model changes, etc.) but keep the
+	 * session header. Resets leafId to null. Used when reloading history from
+	 * an external source (e.g., MongoDB) to avoid duplicates from JSONL.
+	 */
+	clearEntries(): void {
+		this.fileEntries = this.fileEntries.filter((e) => e.type === "session");
+		this.byId.clear();
+		this.labelsById.clear();
+		this.leafId = null;
+		this.flushed = false;
+	}
+
 	getCwd(): string {
 		return this.cwd;
 	}

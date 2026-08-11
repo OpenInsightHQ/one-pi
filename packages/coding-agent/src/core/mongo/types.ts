@@ -128,6 +128,66 @@ export interface RoleDoc {
 }
 
 // ---------------------------------------------------------------------------
+// Conversation & Message documents (shared with arp/LibreChat)
+// ---------------------------------------------------------------------------
+
+export interface MessageDoc {
+	_id: import("mongoose").Types.ObjectId;
+	messageId: string;
+	conversationId: string;
+	user: string;
+	model?: string | null;
+	endpoint?: string;
+	parentMessageId?: string;
+	tokenCount?: number;
+	inputTokenCount?: number;
+	sender?: string;
+	text?: string;
+	streamLog?: string;
+	isCreatedByUser?: boolean;
+	unfinished?: boolean;
+	error?: boolean;
+	finish_reason?: string;
+	recursionLimit?: string;
+	content?: unknown[];
+	attachments?: unknown[];
+	files?: unknown[];
+	expiredAt?: Date | null;
+	createdAt?: Date;
+	updatedAt?: Date;
+	__v?: number;
+	_class?: string;
+	/** Full pi AgentMessage object stored for context reconstruction */
+	agentMessage?: unknown;
+}
+
+export interface ConversationDoc {
+	_id: import("mongoose").Types.ObjectId;
+	conversationId: string;
+	user?: string;
+	messages?: import("mongoose").Types.ObjectId[];
+	title?: string;
+	endpoint?: string;
+	endpointType?: string;
+	model?: string;
+	agent_id?: string;
+	isArchived?: boolean;
+	tags?: string[];
+	files?: string[];
+	maxContextTokens?: number;
+	resendFiles?: boolean;
+	toolCallVisible?: boolean;
+	finish_reason?: string;
+	/** pi-specific: working directory for the session */
+	cwd?: string;
+	expiredAt?: Date | null;
+	createdAt?: Date;
+	updatedAt?: Date;
+	__v?: number;
+	_class?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Resolved principal (used internally by ACL queries)
 // ---------------------------------------------------------------------------
 

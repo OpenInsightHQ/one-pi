@@ -1,6 +1,22 @@
 import mongoose from "mongoose";
-import { accessRoleSchema, aclEntrySchema, roleSchema, skillSchema, userRoleSchema } from "./schemas.js";
-import type { AccessRoleDoc, AclEntryDoc, RoleDoc, SkillDoc, UserRoleDoc } from "./types.js";
+import {
+	accessRoleSchema,
+	aclEntrySchema,
+	conversationSchema,
+	messageSchema,
+	roleSchema,
+	skillSchema,
+	userRoleSchema,
+} from "./schemas.js";
+import type {
+	AccessRoleDoc,
+	AclEntryDoc,
+	ConversationDoc,
+	MessageDoc,
+	RoleDoc,
+	SkillDoc,
+	UserRoleDoc,
+} from "./types.js";
 
 /**
  * Model accessor functions.
@@ -22,6 +38,8 @@ export type AccessRoleModel = mongoose.Model<AccessRoleDoc>;
 export type AclEntryModel = mongoose.Model<AclEntryDoc>;
 export type UserRoleModel = mongoose.Model<UserRoleDoc>;
 export type RoleModel = mongoose.Model<RoleDoc>;
+export type MessageModel = mongoose.Model<MessageDoc>;
+export type ConversationModel = mongoose.Model<ConversationDoc>;
 
 export function getSkillModel(): SkillModel {
 	return mongoose.model<SkillDoc>("Skill", skillSchema, "skills");
@@ -41,4 +59,12 @@ export function getUserRoleModel(): UserRoleModel {
 
 export function getRoleModel(): RoleModel {
 	return mongoose.model<RoleDoc>("Role", roleSchema, "roles");
+}
+
+export function getMessageModel(): MessageModel {
+	return mongoose.model<MessageDoc>("Message", messageSchema, "messages");
+}
+
+export function getConversationModel(): ConversationModel {
+	return mongoose.model<ConversationDoc>("Conversation", conversationSchema, "conversations");
 }

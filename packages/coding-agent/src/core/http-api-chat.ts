@@ -144,6 +144,7 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 				resourceLoader,
 				authStorage,
 				skillPathGuard: createSkillPathGuard(userId),
+				conversationPersistence: { userId, agentId, conversationId: sessionId, cwd },
 			};
 			const result = await createAgentSession(options);
 			session = result.session;
@@ -435,6 +436,7 @@ export async function handleChatCompletions(req: IncomingMessage, res: ServerRes
 				resourceLoader,
 				authStorage,
 				skillPathGuard: createSkillPathGuard(userId),
+				conversationPersistence: { userId, agentId, conversationId: sessionId, cwd },
 			};
 
 			const result = await createAgentSession(options);

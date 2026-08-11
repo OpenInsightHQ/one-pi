@@ -9,6 +9,7 @@ import type { ExtensionRunner, LoadExtensionsResult, ToolDefinition } from "./ex
 import { convertToLlm } from "./messages.js";
 import { ModelRegistry } from "./model-registry.js";
 import { findInitialModel } from "./model-resolver.js";
+import { type ConversationPersistenceContext, isMongoEnabled, loadConversationMessages } from "./mongo/index.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.js";
@@ -99,6 +100,14 @@ export interface CreateAgentSessionOptions {
 
 	/** Settings manager. Default: SettingsManager.create(cwd, agentDir) */
 	settingsManager?: SettingsManager;
+
+	/**
+	 * MongoDB conversation persistence context. When set and MongoDB is
+	 * enabled, conversation history is loaded from MongoDB on session creation
+	 * (replacing JSONL as the primary history source) and new messages are
+	 * persisted to the `conversations` and `messages` collections.
+	 */
+	conversationPersistence?: ConversationPersistenceContext;
 }
 
 /** Result from createAgentSession */
@@ -210,6 +219,20 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
 		await resourceLoader.reload();
 		time("resourceLoader.reload");
+	}
+
+	// Load conversation history from MongoDB (primary source).
+	// MongoDB is the source of truth — if it has data, it replaces JSONL
+	// history to support cross-system inheritance (pi ↔ arp/LibreChat).
+	if (options.conversationPersistence && isMongoEnabled()) {
+		const mongoMessages = await loadConversationMessages(options.conversationPersistence);
+		if (mongoMessages.length > 0) {
+			// Clear JSONL entries to avoid duplicates, then load MongoDB data
+			sessionManager.clearEntries();
+			for (const msg of mongoMessages) {
+				sessionManager.appendMessage(msg as Message);
+			}
+		}
 	}
 
 	// Check if session has existing data to restore
@@ -403,6 +426,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		allowedRoot: options.allowedRoot,
 		bashToolOptions: options.bashToolOptions,
 		skillPathGuard: options.skillPathGuard,
+		conversationPersistence: options.conversationPersistence,
 	});
 	const extensionsResult = resourceLoader.getExtensions();
 

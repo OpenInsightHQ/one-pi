@@ -38,6 +38,18 @@ export {
 	getEffectivePermissions,
 	resolveUserPrincipals,
 } from "./acl.js";
+// Conversation & message persistence service
+export {
+	type ConversationPersistenceContext,
+	deriveTitle,
+	getConversationFromMongo,
+	getLastMessageId,
+	loadConversationMessages,
+	NO_PARENT,
+	saveConversationToMongo,
+	saveMessageToMongo,
+	updateToolCallOutputInMongo,
+} from "./conversation-service.js";
 // Connection management
 export { connectMongo, disconnectMongo, getCachedConnection, getDb, isMongoEnabled } from "./db.js";
 
@@ -45,11 +57,15 @@ export { connectMongo, disconnectMongo, getCachedConnection, getDb, isMongoEnabl
 export {
 	type AccessRoleModel,
 	type AclEntryModel,
+	type ConversationModel,
 	getAccessRoleModel,
 	getAclEntryModel,
+	getConversationModel,
+	getMessageModel,
 	getRoleModel,
 	getSkillModel,
 	getUserRoleModel,
+	type MessageModel,
 	type RoleModel,
 	type SkillModel,
 	type UserRoleModel,
@@ -58,6 +74,8 @@ export {
 export {
 	accessRoleSchema,
 	aclEntrySchema,
+	conversationSchema,
+	messageSchema,
 	roleSchema,
 	skillSchema,
 	userRoleSchema,
@@ -78,7 +96,9 @@ export {
 export {
 	type AccessRoleDoc,
 	type AclEntryDoc,
+	type ConversationDoc,
 	hasPermissions,
+	type MessageDoc,
 	PermissionBits,
 	type Principal,
 	PrincipalModel,
