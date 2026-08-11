@@ -147,7 +147,7 @@ function buildMessageDoc(
 		base.text = extractText(userMsg.content);
 	} else if (message.role === "assistant") {
 		const assistantMsg = message as AssistantMessage;
-		base.sender = assistantMsg.model || PI_MODEL;
+		base.sender = PI_MODEL;
 		base.isCreatedByUser = false;
 		base.text = extractText(assistantMsg.content);
 		base.content = buildContentParts(assistantMsg);
