@@ -280,7 +280,7 @@ function listRecursive(
 				isDirectory: isDir,
 				isHidden,
 			});
-			if (isDir) {
+			if (isDir && !isHidden) {
 				out.push(...walk(fullPath, relativePath));
 			}
 		}
