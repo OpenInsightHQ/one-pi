@@ -45,6 +45,7 @@ export {
 	getConversationFromMongo,
 	getLastMessageId,
 	loadConversationMessages,
+	mergeAssistantMessageInMongo,
 	NO_PARENT,
 	saveConversationToMongo,
 	saveMessageToMongo,

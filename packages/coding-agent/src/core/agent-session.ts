@@ -83,6 +83,7 @@ import {
 	deriveTitle,
 	getLastMessageId,
 	isMongoEnabled,
+	mergeAssistantMessageInMongo,
 	NO_PARENT,
 	saveConversationToMongo,
 	saveMessageToMongo,
@@ -314,6 +315,8 @@ export class AgentSession {
 	private _conversationPersistence?: ConversationPersistenceContext;
 	private _lastMongoMessageId: string | undefined = undefined;
 	private _mongoParentInitialized = false;
+	/** MessageId of the assistant document for the current tool-use turn. Consecutive assistant messages within the same turn are merged into this document. */
+	private _mongoTurnAssistantId: string | undefined = undefined;
 	private _extensionUIContext?: ExtensionUIContext;
 	private _extensionCommandContextActions?: ExtensionCommandContextActions;
 	private _extensionShutdownHandler?: ShutdownHandler;
@@ -628,42 +631,69 @@ export class AgentSession {
 			const wasNewConversation = this._lastMongoMessageId === NO_PARENT;
 			const parentMessageId = this._lastMongoMessageId ?? NO_PARENT;
 
-			// ToolResult messages: update the assistant message's tool_call.output
-			// inline (arp format) AND save as a separate document for pi reload
+			// ToolResult messages: update inline tool_call.output on the assistant message.
+			// No separate document — tool results live inline (arp format).
 			if (message.role === "toolResult") {
 				const toolMsg = message as ToolResultMessage;
 				const outputText = this._extractToolResultText(toolMsg);
-				const messageId = await updateToolCallOutputInMongo(
-					this._conversationPersistence,
-					toolMsg.toolCallId,
-					outputText,
-					toolMsg.isError,
-					toolMsg.toolName,
-					parentMessageId,
-				);
-				if (messageId) {
-					this._lastMongoMessageId = messageId;
-				}
+				await updateToolCallOutputInMongo(this._conversationPersistence, toolMsg.toolCallId, outputText);
 				await saveConversationToMongo(this._conversationPersistence, {});
 				return;
 			}
 
-			// Save message (user, assistant)
+			// User message: new turn starts, clear turn merge state
+			if (message.role === "user") {
+				this._mongoTurnAssistantId = undefined;
+				const messageId = await saveMessageToMongo(this._conversationPersistence, message, parentMessageId);
+				if (messageId) {
+					this._lastMongoMessageId = messageId;
+				}
+				const convoOptions: { title?: string; finishReason?: string } = {};
+				if (wasNewConversation) {
+					convoOptions.title = deriveTitle(this._getUserMessageText(message as Message));
+				}
+				await saveConversationToMongo(this._conversationPersistence, convoOptions);
+				return;
+			}
+
+			// Assistant message: merge consecutive assistant messages within the same turn
+			if (message.role === "assistant") {
+				const assistantMsg = message as AssistantMessage;
+
+				if (this._mongoTurnAssistantId) {
+					// Same turn — merge content into existing assistant document
+					await mergeAssistantMessageInMongo(
+						this._conversationPersistence,
+						this._mongoTurnAssistantId,
+						assistantMsg,
+					);
+				} else {
+					// New assistant document for this turn
+					const messageId = await saveMessageToMongo(this._conversationPersistence, message, parentMessageId);
+					if (messageId) {
+						this._mongoTurnAssistantId = messageId;
+						this._lastMongoMessageId = messageId;
+					}
+				}
+
+				// Turn ends when stopReason is not toolUse
+				if (assistantMsg.stopReason !== "toolUse") {
+					this._mongoTurnAssistantId = undefined;
+				}
+
+				const convoOptions: { finishReason?: string } = {
+					finishReason: assistantMsg.stopReason,
+				};
+				await saveConversationToMongo(this._conversationPersistence, convoOptions);
+				return;
+			}
+
+			// Other message types (custom, etc.)
 			const messageId = await saveMessageToMongo(this._conversationPersistence, message, parentMessageId);
 			if (messageId) {
 				this._lastMongoMessageId = messageId;
 			}
-
-			// Build conversation update options
-			const convoOptions: { title?: string; finishReason?: string } = {};
-			if (wasNewConversation && message.role === "user") {
-				convoOptions.title = deriveTitle(this._getUserMessageText(message as Message));
-			}
-			if (message.role === "assistant") {
-				convoOptions.finishReason = (message as AssistantMessage).stopReason;
-			}
-
-			await saveConversationToMongo(this._conversationPersistence, convoOptions);
+			await saveConversationToMongo(this._conversationPersistence, {});
 		} catch (err) {
 			console.error("[MongoDB] Error persisting message:", err);
 		}
