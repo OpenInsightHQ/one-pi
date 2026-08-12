@@ -152,6 +152,12 @@ export function createHttpApiServer(
 		}
 	});
 
+	// Allow long-running operations (e.g. large zip extraction) to exceed Node's 5min default.
+	// Override via PI_REQUEST_TIMEOUT_MS env var (milliseconds).
+	const requestTimeoutMs = parseInt(process.env.PI_REQUEST_TIMEOUT_MS ?? String(30 * 60 * 1000), 10);
+	server.requestTimeout = requestTimeoutMs;
+	server.timeout = requestTimeoutMs;
+
 	return server;
 }
 
