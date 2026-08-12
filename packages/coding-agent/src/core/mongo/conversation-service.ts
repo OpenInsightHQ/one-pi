@@ -561,7 +561,11 @@ export async function loadConversationMessages(ctx: ConversationPersistenceConte
 
 	try {
 		const Message = getMessageModel();
-		const docs = await Message.find({ conversationId: ctx.conversationId, user: ctx.userId })
+		const docs = await Message.find({
+			conversationId: ctx.conversationId,
+			user: ctx.userId,
+			"metadata.isSubagentTrace": { $ne: true },
+		})
 			.sort({ createdAt: 1 })
 			.lean();
 

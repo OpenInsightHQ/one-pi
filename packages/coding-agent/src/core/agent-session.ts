@@ -47,6 +47,7 @@ import {
 	prepareCompaction,
 	shouldCompact,
 } from "./compaction/index.js";
+import { createCreateTaskTool } from "./create-task-tool.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.js";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.js";
@@ -94,7 +95,9 @@ import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader }
 import type { SettingsManager } from "./settings-manager.js";
 import type { SlashCommandInfo } from "./slash-commands.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
+import { createSubagentTool, SubagentScheduler } from "./subagent/index.js";
 import { buildSystemPrompt } from "./system-prompt.js";
+import { TaskSync } from "./task-sync.js";
 import type { BashOperations, BashToolOptions } from "./tools/bash.js";
 import { createAllToolDefinitions } from "./tools/index.js";
 import type { PathGuard } from "./tools/path-utils.js";
@@ -326,6 +329,12 @@ export class AgentSession {
 	private _toolPromptSnippets: Map<string, string> = new Map();
 	private _toolPromptGuidelines: Map<string, string[]> = new Map();
 
+	// Subagent scheduler for in-process isolated task delegation
+	private _subagentScheduler: SubagentScheduler | undefined = undefined;
+
+	// Task sync with arp-github TaskQueue
+	private _taskSync: TaskSync | undefined = undefined;
+
 	// Base system prompt (without extension appends) - used to apply fresh appends each turn
 	private _baseSystemPrompt = "";
 
@@ -372,6 +381,14 @@ export class AgentSession {
 	 */
 	private _installAgentToolHooks(): void {
 		this.agent.setBeforeToolCall(async ({ toolCall, args }) => {
+			if (toolCall.name === "bash" && this._isSearchCommand(args)) {
+				return {
+					block: true,
+					reason:
+						'Codebase search must be delegated to the explorer subagent. Use the subagent tool with agentName "explorer" instead. Example: subagent({ agentName: "explorer", prompt: "your search query" })',
+				};
+			}
+
 			const runner = this._extensionRunner;
 			if (!runner?.hasHandlers("tool_call")) {
 				return undefined;
@@ -419,6 +436,26 @@ export class AgentSession {
 				details: hookResult.details,
 			};
 		});
+	}
+
+	private static readonly SEARCH_PATTERNS = [/\bgrep\b/, /\brg\b/, /\bfind\b/, /\bag\b/, /\blocate\b/, /\bfzf\b/];
+
+	private _isSearchCommand(args: unknown): boolean {
+		if (!args || typeof args !== "object") return false;
+		const command = (args as { command?: string }).command;
+		if (typeof command !== "string" || command.trim().length === 0) return false;
+
+		const cmd = command.trim();
+		// Don't intercept commands that just happen to contain "find" as part of another word
+		// or commands that are clearly not searches (e.g., "find . -name" is search, "find /etc/passwd" is read)
+		const firstToken = cmd.split(/\s+/)[0];
+
+		// ls is borderline: only intercept bare ls without piping or complex args
+		if (firstToken === "ls") {
+			return true;
+		}
+
+		return AgentSession.SEARCH_PATTERNS.some((pattern) => pattern.test(firstToken));
 	}
 
 	// =========================================================================
@@ -2468,6 +2505,77 @@ export class AgentSession {
 			activeToolNames: baseActiveToolNames,
 			includeAllExtensionTools: options.includeAllExtensionTools,
 		});
+
+		this._registerSubagentTool();
+	}
+
+	private _registerSubagentTool(): void {
+		if (!this._subagentScheduler) {
+			this._subagentScheduler = new SubagentScheduler({
+				getModel: () => this.agent.state.model,
+				streamFn: this.agent.streamFn,
+				getApiKey: this.agent.getApiKey,
+				resolveTools: (names, _cwd) => {
+					const tools: AgentTool[] = [];
+					for (const name of names) {
+						const tool = this._toolRegistry.get(name);
+						if (tool) tools.push(tool);
+					}
+					return tools;
+				},
+				recordToMongo: this._conversationPersistence
+					? {
+							ctx: this._conversationPersistence,
+							saveMessage: (message, parentMessageId) =>
+								saveMessageToMongo(this._conversationPersistence!, message, parentMessageId),
+						}
+					: undefined,
+			});
+		}
+
+		const parentContext = {
+			sessionId: this.sessionManager.getSessionId(),
+			userId: this._conversationPersistence?.userId ?? "unknown",
+			agentId: this._conversationPersistence?.agentId ?? "unknown",
+			cwd: this._cwd,
+		};
+
+		const subagentTool = createSubagentTool(this._subagentScheduler, parentContext) as unknown as AgentTool;
+		this._toolRegistry.set("subagent", subagentTool);
+		this._toolPromptSnippets.set(
+			"subagent",
+			"Delegate subtasks to specialized subagents (explorer for search, coder for implementation, reviewer for review)",
+		);
+		this._toolPromptGuidelines.set("subagent", [
+			"RULE: ALWAYS delegate codebase search, file finding, and project exploration to the explorer subagent. Never use bash for grep/find/rg/ls commands yourself — the explorer subagent has dedicated search tools and will return concise results without polluting the main context.",
+			"Use the subagent tool for any non-trivial subtask: searching code (explorer), implementing a well-defined change (coder), or reviewing code (reviewer). This saves context tokens and keeps the conversation focused.",
+		]);
+
+		if (!this._taskSync) {
+			this._taskSync = new TaskSync();
+		}
+		const createTaskTool = createCreateTaskTool(
+			this._taskSync,
+			parentContext.userId,
+			parentContext.sessionId,
+			parentContext.agentId,
+			() => this._turnIndex,
+		) as unknown as AgentTool;
+		this._toolRegistry.set("create_task", createTaskTool);
+		this._toolPromptSnippets.set(
+			"create_task",
+			"Create tasks that wait for human input/approval (confirmation, choice, form, free text)",
+		);
+
+		const currentActive = this.getActiveToolNames();
+		const newActive = [...currentActive];
+		if (!newActive.includes("subagent")) newActive.push("subagent");
+		if (!newActive.includes("create_task")) newActive.push("create_task");
+		if (newActive.length !== currentActive.length) {
+			this.setActiveToolsByName(newActive);
+		}
+
+		this._rebuildSystemPrompt(newActive);
 	}
 
 	async reload(): Promise<void> {
