@@ -206,27 +206,24 @@ export async function saveMessageToMongo(
  * written back into the assistant message's content array so arp/LibreChat
  * can display the tool output inline.
  *
- * Also persists the ToolResultMessage as its own message document (with
- * `agentMessage` field) so pi can reconstruct it on reload.
+ * Does NOT create a separate message document — the tool result lives inline
+ * in the assistant message's content array (arp format). On reload,
+ * `reconstructAgentMessage` extracts ToolResultMessages from the inline output.
  *
- * Returns the messageId of the newly created tool result message document,
- * or null if not saved.
+ * Returns the parentMessageId (the assistant message's messageId) for linking,
+ * or null if not updated.
  */
 export async function updateToolCallOutputInMongo(
 	ctx: ConversationPersistenceContext,
 	toolCallId: string,
 	output: string,
-	isError: boolean,
-	toolName: string,
-	parentMessageId: string,
 ): Promise<string | null> {
 	if (!isMongoEnabled()) return null;
 
 	try {
 		const Message = getMessageModel();
 
-		// 1. Update the tool_call.output on the most recent assistant message
-		// Find the last assistant message that has a tool_call matching this toolCallId
+		// Find the most recent assistant message that has a tool_call matching this toolCallId
 		const assistantDocs = await Message.find({
 			conversationId: ctx.conversationId,
 			user: ctx.userId,
@@ -240,13 +237,11 @@ export async function updateToolCallOutputInMongo(
 			const content = (doc as Record<string, unknown>).content as Array<Record<string, unknown>> | undefined;
 			if (!content || !Array.isArray(content)) continue;
 
-			let found = false;
 			for (let i = 0; i < content.length; i++) {
 				const part = content[i];
 				if (part.type === "tool_call") {
 					const tc = part.tool_call as Record<string, unknown> | undefined;
 					if (tc && tc.id === toolCallId) {
-						// Update this content part's output
 						const contentPath = `content.${i}.tool_call.output`;
 						const progressPath = `content.${i}.tool_call.progress`;
 						await Message.updateOne(
@@ -258,46 +253,13 @@ export async function updateToolCallOutputInMongo(
 								},
 							},
 						);
-						found = true;
-						break;
+						// Return the assistant message's messageId for parent linking
+						return (doc as Record<string, unknown>).messageId as string;
 					}
 				}
 			}
-			if (found) break;
 		}
-
-		// 2. Also save the ToolResultMessage as its own document for pi reload
-		const messageId = randomUUID();
-		const toolResultDoc = {
-			messageId,
-			conversationId: ctx.conversationId,
-			user: ctx.userId,
-			parentMessageId,
-			endpoint: PI_ENDPOINT,
-			sender: "tool",
-			isCreatedByUser: false,
-			text: output,
-			model: PI_MODEL,
-			isToolResult: true,
-			toolCallId,
-			toolName,
-			error: isError,
-			agentMessage: {
-				role: "toolResult",
-				toolCallId,
-				toolName,
-				content: [{ type: "text", text: output }],
-				isError,
-				timestamp: Date.now(),
-			} as ToolResultMessage,
-		};
-
-		await Message.findOneAndUpdate(
-			{ messageId, user: ctx.userId },
-			{ $set: toolResultDoc },
-			{ upsert: true, new: true },
-		);
-		return messageId;
+		return null;
 	} catch (err) {
 		console.error("[MongoDB] Error updating tool call output:", err);
 		return null;
@@ -396,6 +358,23 @@ function reconstructAgentMessage(doc: Record<string, unknown>): AgentMessage[] {
 	// Path 1: pi-written message with full agentMessage
 	const agentMessage = doc.agentMessage as AgentMessage | undefined;
 	if (agentMessage && typeof agentMessage === "object" && "role" in agentMessage) {
+		// Skip standalone tool result documents — tool results are now inline
+		// in the assistant message's content array (arp format). These standalone
+		// docs may exist from older data but should be ignored.
+		if (doc.isToolResult as boolean) {
+			return [];
+		}
+
+		// For pi-written assistant messages, extract tool results from the
+		// inline content array (tool_call.output) and generate ToolResultMessages
+		if (agentMessage.role === "assistant") {
+			const content = doc.content as Array<{ type: string; [key: string]: unknown }> | undefined;
+			const toolResults = extractToolResultsFromContent(content);
+			if (toolResults.length > 0) {
+				return [agentMessage, ...toolResults];
+			}
+		}
+
 		return [agentMessage];
 	}
 
@@ -421,22 +400,10 @@ function reconstructAgentMessage(doc: Record<string, unknown>): AgentMessage[] {
 		];
 	}
 
-	// Tool result message (pi-written separate document)
-	if ((doc.isToolResult as boolean) || (doc.sender as string) === "tool") {
-		const toolCallId = (doc.toolCallId as string) || "";
-		const toolName = (doc.toolName as string) || "";
-		const outputText = text || extractTextFromContent(content);
-		if (!outputText) return [];
-		return [
-			{
-				role: "toolResult",
-				toolCallId,
-				toolName,
-				content: [{ type: "text", text: outputText }],
-				isError: (doc.error as boolean) ?? false,
-				timestamp,
-			} as ToolResultMessage,
-		];
+	// Skip standalone tool result documents (no agentMessage, sender='tool')
+	// These are from older data — tool results are inline in assistant messages
+	if ((doc.sender as string) === "tool" || (doc.isToolResult as boolean)) {
+		return [];
 	}
 
 	// Assistant message — reconstruct content from arp content array
@@ -539,13 +506,32 @@ function reconstructAgentMessage(doc: Record<string, unknown>): AgentMessage[] {
 	return messages;
 }
 
-/** Extract concatenated text from an arp content array. */
-function extractTextFromContent(content: Array<{ type: string; [key: string]: unknown }> | undefined): string {
-	if (!content || !Array.isArray(content)) return "";
-	return content
-		.filter((part) => part.type === "text" && part.text)
-		.map((part) => part.text as string)
-		.join("");
+/**
+ * Extract ToolResultMessages from inline tool_call.output fields in an arp
+ * content array. Returns one ToolResultMessage per tool_call that has a
+ * non-empty output.
+ */
+function extractToolResultsFromContent(
+	content: Array<{ type: string; [key: string]: unknown }> | undefined,
+): ToolResultMessage[] {
+	if (!content || !Array.isArray(content)) return [];
+
+	const results: ToolResultMessage[] = [];
+	for (const part of content) {
+		if (part.type !== "tool_call") continue;
+		const tc = part.tool_call as { id?: string; name?: string; output?: string } | undefined;
+		if (!tc || tc.output == null || tc.output === "") continue;
+
+		results.push({
+			role: "toolResult",
+			toolCallId: tc.id || "",
+			toolName: tc.name || "",
+			content: [{ type: "text", text: tc.output }],
+			isError: false,
+			timestamp: Date.now(),
+		});
+	}
+	return results;
 }
 
 /**

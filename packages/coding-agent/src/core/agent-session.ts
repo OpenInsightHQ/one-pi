@@ -592,21 +592,11 @@ export class AgentSession {
 			const parentMessageId = this._lastMongoMessageId ?? NO_PARENT;
 
 			// ToolResult messages: update the assistant message's tool_call.output
-			// inline (arp format) AND save as a separate document for pi reload
+			// inline (arp format). No separate document — tool results live inline.
 			if (message.role === "toolResult") {
 				const toolMsg = message as ToolResultMessage;
 				const outputText = this._extractToolResultText(toolMsg);
-				const messageId = await updateToolCallOutputInMongo(
-					this._conversationPersistence,
-					toolMsg.toolCallId,
-					outputText,
-					toolMsg.isError,
-					toolMsg.toolName,
-					parentMessageId,
-				);
-				if (messageId) {
-					this._lastMongoMessageId = messageId;
-				}
+				await updateToolCallOutputInMongo(this._conversationPersistence, toolMsg.toolCallId, outputText);
 				await saveConversationToMongo(this._conversationPersistence, {});
 				return;
 			}
