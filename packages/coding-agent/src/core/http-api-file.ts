@@ -211,14 +211,16 @@ export async function handleFilesList(req: IncomingMessage, res: ServerResponse)
 }
 
 type FlatEntry = { name: string; size: number; lastModified: string; isDirectory: boolean; isHidden: boolean };
-type RecursiveEntry = { name: string; path: string; size: number; lastModified: string; isDirectory: boolean; isHidden: boolean };
+type RecursiveEntry = {
+	name: string;
+	path: string;
+	size: number;
+	lastModified: string;
+	isDirectory: boolean;
+	isHidden: boolean;
+};
 
-function listFlat(
-	dir: string,
-	showHidden: boolean,
-	useModifiedFilter: boolean,
-	modifiedSinceMs: number,
-): FlatEntry[] {
+function listFlat(dir: string, showHidden: boolean, useModifiedFilter: boolean, modifiedSinceMs: number): FlatEntry[] {
 	const files: FlatEntry[] = [];
 	const entries = readdirSync(dir, { withFileTypes: true });
 
