@@ -198,6 +198,66 @@ export async function saveMessageToMongo(
 }
 
 /**
+ * Merge an assistant message's content into an existing assistant message
+ * document in MongoDB. Used to combine consecutive LLM responses within the
+ * same tool-use turn into a single document (matching arp/LibreChat behavior).
+ *
+ * Appends content parts (think, text, tool_call) to the existing document's
+ * content array, concatenates text, and updates usage/finish_reason.
+ */
+export async function mergeAssistantMessageInMongo(
+	ctx: ConversationPersistenceContext,
+	targetMessageId: string,
+	message: AssistantMessage,
+): Promise<void> {
+	if (!isMongoEnabled()) return;
+
+	try {
+		const Message = getMessageModel();
+		const existing = (await Message.findOne({ messageId: targetMessageId, user: ctx.userId }).lean()) as Record<
+			string,
+			unknown
+		> | null;
+		if (!existing) {
+			// Target not found — fallback to creating a new document
+			await saveMessageToMongo(ctx, message, NO_PARENT);
+			return;
+		}
+
+		// Build new content parts to append
+		const newParts: ContentPart[] = buildContentParts(message);
+
+		// Merge existing content with new parts
+		const existingContent = (existing.content as ContentPart[]) || [];
+		const mergedContent = [...existingContent, ...newParts];
+
+		// Concatenate text
+		const existingText = (existing.text as string) || "";
+		const newText = extractText(message.content);
+		const mergedText = existingText + (existingText && newText ? "\n" : "") + newText;
+
+		// Update usage (take the latest)
+		const update: Record<string, unknown> = {
+			content: mergedContent,
+			text: mergedText,
+			finish_reason: mapStopReason(message.stopReason),
+		};
+
+		if (message.usage) {
+			update.tokenCount = message.usage.output;
+			update.inputTokenCount = message.usage.input;
+		}
+
+		// Update agentMessage to the latest assistant message
+		update.agentMessage = message;
+
+		await Message.updateOne({ messageId: targetMessageId, user: ctx.userId }, { $set: update });
+	} catch (err) {
+		console.error("[MongoDB] Error merging assistant message:", err);
+	}
+}
+
+/**
  * Update a tool_call content part's `output` field on the most recent
  * assistant message, matching by `toolCallId`.
  *
