@@ -169,6 +169,9 @@ export async function handleFilesList(req: IncomingMessage, res: ServerResponse)
 	const sessionId = urlObj.searchParams.get("sessionId");
 	const path = urlObj.searchParams.get("path") ?? "";
 	const showHidden = urlObj.searchParams.get("showHidden") !== "false";
+	const recursive = urlObj.searchParams.get("recursive") === "true";
+	const modifiedSinceRaw = urlObj.searchParams.get("modifiedSince");
+	const modifiedSinceMs = modifiedSinceRaw ? Date.parse(modifiedSinceRaw) : NaN;
 
 	if (!agentId) {
 		sendError(res, 400, "agentId is required");
@@ -178,7 +181,12 @@ export async function handleFilesList(req: IncomingMessage, res: ServerResponse)
 		sendError(res, 400, "sessionId is required");
 		return;
 	}
+	if (modifiedSinceRaw && Number.isNaN(modifiedSinceMs)) {
+		sendError(res, 400, "modifiedSince must be a valid ISO date string");
+		return;
+	}
 
+	const useModifiedFilter = !Number.isNaN(modifiedSinceMs);
 	const cwd = getUserSessionDir(userId, agentId, sessionId);
 	const targetDir = path ? validatePathWithinCwd(cwd, path) : cwd;
 
@@ -188,34 +196,95 @@ export async function handleFilesList(req: IncomingMessage, res: ServerResponse)
 	}
 
 	try {
-		const files: { name: string; size: number; lastModified: string; isDirectory: boolean; isHidden: boolean }[] = [];
-		const entries = readdirSync(targetDir, { withFileTypes: true });
-
-		for (const entry of entries) {
-			const isHidden = entry.name.startsWith(".");
-			if (!showHidden && isHidden) continue;
-			const fullPath = join(targetDir, entry.name);
-			const stats = statSync(fullPath);
-			files.push({
-				name: entry.name,
-				size: stats.size,
-				lastModified: stats.mtime.toISOString(),
-				isDirectory: entry.isDirectory(),
-				isHidden,
-			});
+		if (recursive) {
+			const files = listRecursive(targetDir, path, showHidden, useModifiedFilter, modifiedSinceMs);
+			sendJson(res, 200, { files, currentPath: path, recursive: true });
+			return;
 		}
 
-		files.sort((a, b) => {
-			if (a.isDirectory !== b.isDirectory) {
-				return a.isDirectory ? -1 : 1;
-			}
-			return a.name.localeCompare(b.name);
-		});
-
+		const files = listFlat(targetDir, showHidden, useModifiedFilter, modifiedSinceMs);
 		sendJson(res, 200, { files, currentPath: path, showHidden });
 	} catch (error) {
 		const message = error instanceof Error ? error.message : "Unknown error";
 		sendError(res, 500, `Failed to list files: ${message}`);
+	}
+}
+
+type FlatEntry = { name: string; size: number; lastModified: string; isDirectory: boolean; isHidden: boolean };
+type RecursiveEntry = { name: string; path: string; size: number; lastModified: string; isDirectory: boolean; isHidden: boolean };
+
+function listFlat(
+	dir: string,
+	showHidden: boolean,
+	useModifiedFilter: boolean,
+	modifiedSinceMs: number,
+): FlatEntry[] {
+	const files: FlatEntry[] = [];
+	const entries = readdirSync(dir, { withFileTypes: true });
+
+	for (const entry of entries) {
+		const isHidden = entry.name.startsWith(".");
+		if (!showHidden && isHidden) continue;
+		const fullPath = join(dir, entry.name);
+		const stats = statSync(fullPath);
+		if (useModifiedFilter && !entry.isDirectory() && stats.mtimeMs < modifiedSinceMs) continue;
+		files.push({
+			name: entry.name,
+			size: stats.size,
+			lastModified: stats.mtime.toISOString(),
+			isDirectory: entry.isDirectory(),
+			isHidden,
+		});
+	}
+
+	files.sort((a, b) => {
+		if (a.isDirectory !== b.isDirectory) {
+			return a.isDirectory ? -1 : 1;
+		}
+		return a.name.localeCompare(b.name);
+	});
+	return files;
+}
+
+function listRecursive(
+	rootDir: string,
+	basePath: string,
+	showHidden: boolean,
+	useModifiedFilter: boolean,
+	modifiedSinceMs: number,
+): RecursiveEntry[] {
+	const results: RecursiveEntry[] = walk(rootDir, basePath);
+	return results.sort((a, b) => a.path.localeCompare(b.path));
+
+	function walk(dir: string, prefix: string): RecursiveEntry[] {
+		const out: RecursiveEntry[] = [];
+		let entries;
+		try {
+			entries = readdirSync(dir, { withFileTypes: true });
+		} catch {
+			return out;
+		}
+		for (const entry of entries) {
+			const isHidden = entry.name.startsWith(".");
+			if (!showHidden && isHidden) continue;
+			const fullPath = join(dir, entry.name);
+			const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+			const stats = statSync(fullPath);
+			const isDir = entry.isDirectory();
+			if (useModifiedFilter && !isDir && stats.mtimeMs < modifiedSinceMs) continue;
+			out.push({
+				name: entry.name,
+				path: relativePath,
+				size: stats.size,
+				lastModified: stats.mtime.toISOString(),
+				isDirectory: isDir,
+				isHidden,
+			});
+			if (isDir) {
+				out.push(...walk(fullPath, relativePath));
+			}
+		}
+		return out;
 	}
 }
 
