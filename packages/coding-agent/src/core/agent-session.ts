@@ -314,6 +314,8 @@ export class AgentSession {
 	private _mongoParentInitialized = false;
 	/** MessageId of the assistant document for the current tool-use turn. Consecutive assistant messages within the same turn are merged into this document. */
 	private _mongoTurnAssistantId: string | undefined = undefined;
+	private _providedUserMessageId: string | undefined = undefined;
+	private _providedResponseMessageId: string | undefined = undefined;
 	private _extensionUIContext?: ExtensionUIContext;
 	private _extensionCommandContextActions?: ExtensionCommandContextActions;
 	private _extensionShutdownHandler?: ShutdownHandler;
@@ -578,6 +580,16 @@ export class AgentSession {
 	}
 
 	/**
+	 * Set caller-provided messageIds for the current turn, so that persisted
+	 * messages use the same IDs as the caller (LibreChat) expects.
+	 * Called before each prompt() invocation.
+	 */
+	public setMessageIds(userMessageId?: string, responseMessageId?: string): void {
+		this._providedUserMessageId = userMessageId;
+		this._providedResponseMessageId = responseMessageId;
+	}
+
+	/**
 	 * Persist a single message to MongoDB conversations/messages collections.
 	 * Maintains parent-child linking via _lastMongoMessageId.
 	 */
@@ -604,13 +616,18 @@ export class AgentSession {
 				return;
 			}
 
-			// User message: new turn starts, clear turn merge state
-			if (message.role === "user") {
-				this._mongoTurnAssistantId = undefined;
-				const messageId = await saveMessageToMongo(this._conversationPersistence, message, parentMessageId);
-				if (messageId) {
-					this._lastMongoMessageId = messageId;
-				}
+		// User message: new turn starts, clear turn merge state
+		if (message.role === "user") {
+			this._mongoTurnAssistantId = undefined;
+			const messageId = await saveMessageToMongo(
+				this._conversationPersistence,
+				message,
+				parentMessageId,
+				this._providedUserMessageId,
+			);
+			if (messageId) {
+				this._lastMongoMessageId = messageId;
+			}
 				const convoOptions: { title?: string; finishReason?: string } = {};
 				if (wasNewConversation) {
 					convoOptions.title = deriveTitle(this._getUserMessageText(message as Message));
@@ -630,14 +647,19 @@ export class AgentSession {
 						this._mongoTurnAssistantId,
 						assistantMsg,
 					);
-				} else {
-					// New assistant document for this turn
-					const messageId = await saveMessageToMongo(this._conversationPersistence, message, parentMessageId);
-					if (messageId) {
-						this._mongoTurnAssistantId = messageId;
-						this._lastMongoMessageId = messageId;
-					}
+			} else {
+				// New assistant document for this turn
+				const messageId = await saveMessageToMongo(
+					this._conversationPersistence,
+					message,
+					parentMessageId,
+					this._providedResponseMessageId,
+				);
+				if (messageId) {
+					this._mongoTurnAssistantId = messageId;
+					this._lastMongoMessageId = messageId;
 				}
+			}
 
 				// Turn ends when stopReason is not toolUse
 				if (assistantMsg.stopReason !== "toolUse") {

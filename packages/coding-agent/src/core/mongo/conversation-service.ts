@@ -125,8 +125,9 @@ function buildMessageDoc(
 	ctx: ConversationPersistenceContext,
 	message: AgentMessage,
 	parentMessageId: string,
+	overrideMessageId?: string,
 ): MessageDocData {
-	const messageId = generateMessageId(message.role);
+	const messageId = overrideMessageId || generateMessageId(message.role);
 	const base: MessageDocData = {
 		messageId,
 		conversationId: ctx.conversationId,
@@ -178,10 +179,11 @@ export async function saveMessageToMongo(
 	ctx: ConversationPersistenceContext,
 	message: AgentMessage,
 	parentMessageId: string,
+	overrideMessageId?: string,
 ): Promise<string | null> {
 	if (!isMongoEnabled()) return null;
 
-	const doc = buildMessageDoc(ctx, message, parentMessageId);
+	const doc = buildMessageDoc(ctx, message, parentMessageId, overrideMessageId);
 
 	try {
 		const Message = getMessageModel();

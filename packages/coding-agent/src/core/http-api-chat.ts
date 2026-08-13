@@ -40,6 +40,8 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 		cwd?: string;
 		stream?: boolean;
 		systemPrompt?: string;
+		userMessageId?: string;
+		responseMessageId?: string;
 	}>(req);
 
 	if (!body || !body.message) {
@@ -289,6 +291,8 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 	});
 
 	const dmpSystemSuffix = `\n[DMP Context]\nX-User-Id: ${userId}\nX-Agent-Id: ${agentId}\nX-Conversation-Id: ${sessionId}\nWhen calling any dmp- skill script via python, always pass these as CLI arguments: --X-User-Id "${userId}" --X-Agent-Id "${agentId}" --X-Conversation-Id "${sessionId}"`;
+
+	session.setMessageIds(body.userMessageId, body.responseMessageId);
 
 	try {
 		await session.prompt(body.message, {
