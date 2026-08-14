@@ -593,6 +593,8 @@ export class Agent {
 
 			this.appendMessage(errorMsg);
 			this._state.error = err?.message || String(err);
+			this.emit({ type: "message_start", message: errorMsg });
+			this.emit({ type: "message_end", message: errorMsg });
 			this.emit({ type: "agent_end", messages: [errorMsg] });
 		} finally {
 			this._state.isStreaming = false;
