@@ -132,6 +132,7 @@ export async function handleUpload(req: IncomingMessage, res: ServerResponse): P
 				resourceLoader,
 				authStorage,
 				skillPathGuard: createSkillPathGuard(userId),
+				conversationPersistence: { userId, agentId, conversationId: sessionId, cwd },
 			};
 			const result = await createAgentSession(options);
 			session = result.session;
