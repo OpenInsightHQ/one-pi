@@ -179,30 +179,41 @@ export class SubagentScheduler {
 
 const MAX_PROGRESS_LEN = 400;
 
-/** Format a subagent event as a one-line progress string for live UI streaming. */
+/**
+ * Format a subagent event as a progress string for live UI streaming.
+ *
+ * Boundary events (thinking_start/text_start/tool lifecycle) emit a prefixed
+ * header line ending in a newline. Content deltas are forwarded raw so the
+ * UI concatenates them into a continuous paragraph - prefixing every delta
+ * would fragment the display word-by-word.
+ */
 function formatProgressEvent(agentName: string, event: AgentEvent): string | undefined {
 	switch (event.type) {
 		case "message_update": {
 			const e = event.assistantMessageEvent;
-			if (e.type === "text_delta" && e.delta) {
-				return `[${agentName}] ${truncate(e.delta)}`;
+			switch (e.type) {
+				case "thinking_start":
+					return `\n[${agentName} | thinking] `;
+				case "thinking_delta":
+					return e.delta ? truncate(e.delta) : undefined;
+				case "text_start":
+					return `\n[${agentName} | output] `;
+				case "text_delta":
+					return e.delta ? truncate(e.delta) : undefined;
+				default:
+					return undefined;
 			}
-			if (e.type === "thinking_delta" && e.delta) {
-				return `[${agentName}] (thinking) ${truncate(e.delta)}`;
-			}
-			return undefined;
 		}
 		case "tool_execution_start":
-			return `[${agentName}] tool: ${event.toolName}`;
+			return `\n[${agentName}] tool: ${event.toolName}\n`;
 		case "tool_execution_end":
-			return `[${agentName}] tool ${event.toolName} ${event.isError ? "failed" : "done"}`;
+			return `\n[${agentName}] tool ${event.toolName} ${event.isError ? "failed" : "done"}\n`;
 		default:
 			return undefined;
 	}
 }
 
 function truncate(text: string): string {
-	const oneLine = text.replace(/\n/g, " ").trim();
-	if (oneLine.length <= MAX_PROGRESS_LEN) return oneLine;
-	return `${oneLine.slice(0, MAX_PROGRESS_LEN)}...`;
+	if (text.length <= MAX_PROGRESS_LEN) return text;
+	return `${text.slice(0, MAX_PROGRESS_LEN)}...`;
 }
