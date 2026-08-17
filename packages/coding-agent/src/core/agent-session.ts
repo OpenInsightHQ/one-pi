@@ -653,18 +653,18 @@ export class AgentSession {
 				return;
 			}
 
-		// User message: new turn starts, clear turn merge state
-		if (message.role === "user") {
-			this._mongoTurnAssistantId = undefined;
-			const messageId = await saveMessageToMongo(
-				this._conversationPersistence,
-				message,
-				parentMessageId,
-				this._providedUserMessageId,
-			);
-			if (messageId) {
-				this._lastMongoMessageId = messageId;
-			}
+			// User message: new turn starts, clear turn merge state
+			if (message.role === "user") {
+				this._mongoTurnAssistantId = undefined;
+				const messageId = await saveMessageToMongo(
+					this._conversationPersistence,
+					message,
+					parentMessageId,
+					this._providedUserMessageId,
+				);
+				if (messageId) {
+					this._lastMongoMessageId = messageId;
+				}
 				const convoOptions: { title?: string; finishReason?: string } = {};
 				if (wasNewConversation) {
 					convoOptions.title = deriveTitle(this._getUserMessageText(message as Message));
@@ -684,19 +684,19 @@ export class AgentSession {
 						this._mongoTurnAssistantId,
 						assistantMsg,
 					);
-			} else {
-				// New assistant document for this turn
-				const messageId = await saveMessageToMongo(
-					this._conversationPersistence,
-					message,
-					parentMessageId,
-					this._providedResponseMessageId,
-				);
-				if (messageId) {
-					this._mongoTurnAssistantId = messageId;
-					this._lastMongoMessageId = messageId;
+				} else {
+					// New assistant document for this turn
+					const messageId = await saveMessageToMongo(
+						this._conversationPersistence,
+						message,
+						parentMessageId,
+						this._providedResponseMessageId,
+					);
+					if (messageId) {
+						this._mongoTurnAssistantId = messageId;
+						this._lastMongoMessageId = messageId;
+					}
 				}
-			}
 
 				// Turn ends when stopReason is not toolUse
 				if (assistantMsg.stopReason !== "toolUse") {

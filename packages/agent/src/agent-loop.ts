@@ -201,22 +201,22 @@ async function runLoop(
 			const toolCalls = message.content.filter((c) => c.type === "toolCall");
 			hasMoreToolCalls = toolCalls.length > 0;
 
-		const toolResults: ToolResultMessage[] = [];
-		if (hasMoreToolCalls) {
-			try {
-				toolResults.push(...(await executeToolCalls(currentContext, message, config, signal, emit)));
-			} catch (toolErr: any) {
-				const errorMsg: AssistantMessage = {
-					...message,
-					stopReason: "error",
-					errorMessage: toolErr?.message || String(toolErr),
-				};
-				await emit({ type: "turn_end", message: errorMsg, toolResults: [] });
-				await emit({ type: "agent_end", messages: newMessages });
-				return;
-			}
+			const toolResults: ToolResultMessage[] = [];
+			if (hasMoreToolCalls) {
+				try {
+					toolResults.push(...(await executeToolCalls(currentContext, message, config, signal, emit)));
+				} catch (toolErr: any) {
+					const errorMsg: AssistantMessage = {
+						...message,
+						stopReason: "error",
+						errorMessage: toolErr?.message || String(toolErr),
+					};
+					await emit({ type: "turn_end", message: errorMsg, toolResults: [] });
+					await emit({ type: "agent_end", messages: newMessages });
+					return;
+				}
 
-			for (const result of toolResults) {
+				for (const result of toolResults) {
 					currentContext.messages.push(result);
 					newMessages.push(result);
 				}
