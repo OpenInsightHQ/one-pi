@@ -2604,6 +2604,7 @@ export class AgentSession {
 		this._toolPromptGuidelines.set("subagent", [
 			"RULE: ALWAYS delegate codebase search, file finding, and project exploration to the explorer subagent. Never use bash for grep/find/rg/ls commands yourself — the explorer subagent has dedicated search tools and will return concise results without polluting the main context.",
 			"Use the subagent tool for any non-trivial subtask: searching code (explorer), implementing a well-defined change (coder), or reviewing code (reviewer). This saves context tokens and keeps the conversation focused.",
+			"When decomposing work into subtasks, first call create_task (type 'subagent') once per subtask so the user sees the plan in their task panel, then dispatch via the subagent tool passing each task _id as taskId — statuses update automatically as subagents run and finish.",
 		]);
 
 		if (!this._taskSync) {

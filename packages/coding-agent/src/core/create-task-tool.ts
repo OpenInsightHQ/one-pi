@@ -5,6 +5,20 @@ import type { TaskFormField, TaskSync } from "./task-sync.js";
 const createTaskSchema = Type.Object({
 	title: Type.String({ description: "Short title for the task" }),
 	description: Type.Optional(Type.String({ description: "Detailed description of what's needed" })),
+	type: Type.Optional(
+		Type.Enum(
+			{
+				ai_pending: "ai_pending",
+				collaboration: "collaboration",
+				manual: "manual",
+				subagent: "subagent",
+			},
+			{
+				description:
+					"'ai_pending' (default): waits for a human response. 'subagent': an AI-execution subtask — use when decomposing work; pass the returned _id as taskId to the subagent tool so status auto-updates. 'collaboration'/'manual': cross-user collaboration tasks.",
+			},
+		),
+	),
 	formType: Type.Optional(
 		Type.Enum(
 			{
@@ -74,15 +88,18 @@ export function createCreateTaskTool(
 	return {
 		name: "create_task",
 		label: "Create Task",
-		description: `Create a task in the task queue that waits for human or agent processing.
+		description: `Create a task in the shared task queue. Tasks appear in the user's task panel.
 
-Use this when you need:
-- User confirmation or approval before proceeding ('confirmation')
-- User to choose between options ('choice')
-- Structured input from the user ('form')
-- Free-form text response ('free_text')
-
-The task will appear in the user's task panel. When the user responds, the task status changes to 'waiting_agent' and the response becomes available for the next prompt.`,
+Two usage patterns:
+1. Human-pending tasks (type 'ai_pending', default): wait for user input before you proceed.
+   - 'confirmation': approve/reject before an action
+   - 'choice': user picks from options
+   - 'form': structured input fields
+   - 'free_text': free-form text response
+2. AI-execution subtasks (type 'subagent'): use when DECOMPOSING work into subtasks.
+   Create one task per subtask FIRST so the user sees the plan, then execute them
+   via the subagent tool passing each returned _id as taskId — the task status
+   then auto-updates (running → completed/failed).`,
 		parameters: createTaskSchema,
 		async execute(_toolCallId, params) {
 			if (!taskSync.isEnabled()) {
@@ -90,19 +107,20 @@ The task will appear in the user's task panel. When the user responds, the task 
 					content: [
 						{
 							type: "text",
-							text: "Task sync is not configured (ARP_HOST or PI_API_KEY not set). Task was not created.",
+							text: "Task queue is not available (MongoDB not enabled). Task was not created.",
 						},
 					],
 					details: { taskId: null, status: "error" },
 				};
 			}
 
+			const type = params.type ?? "ai_pending";
 			const taskId = await taskSync.createTask({
 				toUserId: params.toUserId ?? defaultUserId,
 				fromAgentId: defaultAgentId,
 				title: params.title,
 				description: params.description,
-				type: "ai_pending",
+				type,
 				formType: params.formType ?? "free_text",
 				choices: params.choices,
 				fields: params.fields as TaskFormField[] | undefined,
@@ -115,6 +133,18 @@ The task will appear in the user's task panel. When the user responds, the task 
 				return {
 					content: [{ type: "text", text: "Failed to create task." }],
 					details: { taskId: null, status: "error" },
+				};
+			}
+
+			if (type === "subagent") {
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Subtask created: "${params.title}"\nTask ID: ${taskId}\nStatus: pending (queued for execution). Pass this _id as taskId to the subagent tool when dispatching.`,
+						},
+					],
+					details: { taskId, status: "pending" },
 				};
 			}
 

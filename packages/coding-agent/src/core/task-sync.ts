@@ -15,7 +15,7 @@ export interface CreateTaskParams {
 	fromAgentId?: string;
 	title: string;
 	description?: string;
-	type?: "ai_pending" | "collaboration" | "manual";
+	type?: "ai_pending" | "collaboration" | "manual" | "subagent";
 	formType?: "free_text" | "choice" | "form" | "confirmation";
 	choices?: { label: string; value: string; description?: string }[];
 	fields?: TaskFormField[];

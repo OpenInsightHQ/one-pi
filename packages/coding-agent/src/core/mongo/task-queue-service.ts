@@ -22,6 +22,8 @@ export interface CreateTaskData {
 	title: string;
 	description?: string;
 	type?: string;
+	/** Initial status. Defaults to 'pending' at the schema level; subagent executions pass 'running'. */
+	status?: string;
 	priority?: string;
 	formType?: string;
 	choices?: Array<{ label: string; value: string; description?: string }>;
