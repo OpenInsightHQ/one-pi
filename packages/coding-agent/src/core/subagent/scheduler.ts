@@ -106,7 +106,7 @@ export class SubagentScheduler {
 		const unsubscribe = agent.subscribe((event: AgentEvent) => {
 			if (event.type === "message_end") {
 				const msg = event.message as AgentMessage;
-				recorder.record(msg).catch(() => {});
+				recorder.record(msg);
 				if (msg.role === "assistant") {
 					const asstMsg = msg as { usage?: { input: number; output: number } };
 					if (asstMsg.usage) {
@@ -129,7 +129,7 @@ export class SubagentScheduler {
 			await agent.prompt(task.prompt);
 			unsubscribe();
 
-			return {
+			const result: SubagentResult = {
 				taskId: task.id,
 				agentName: task.agentName,
 				success: true,
@@ -137,9 +137,11 @@ export class SubagentScheduler {
 				usage,
 				durationMs: Date.now() - start,
 			};
+			await recorder.flush(result.finalOutput, true, result.durationMs);
+			return result;
 		} catch (err) {
 			unsubscribe();
-			return {
+			const result: SubagentResult = {
 				taskId: task.id,
 				agentName: task.agentName,
 				success: false,
@@ -147,6 +149,8 @@ export class SubagentScheduler {
 				error: err instanceof Error ? err.message : String(err),
 				durationMs: Date.now() - start,
 			};
+			await recorder.flush(result.error ?? "", false, result.durationMs);
+			return result;
 		} finally {
 			this.running.delete(task.id);
 		}
