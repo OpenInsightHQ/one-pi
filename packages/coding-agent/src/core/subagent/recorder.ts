@@ -25,8 +25,10 @@ export class SubagentRecorder {
 	async record(message: AgentMessage): Promise<void> {
 		if (!this.recorder) return;
 
-		this.seq++;
-		const messageId = `sub_${this.task.id}_${this.seq}`;
+		// Capture seq synchronously: fire-and-forget concurrent record() calls
+		// interleave across the await below, so this.seq must not be read later.
+		const seq = ++this.seq;
+		const messageId = `sub_${this.task.id}_${seq}`;
 		const parentMessageId = this.lastMessageId;
 		this.lastMessageId = messageId;
 
@@ -44,7 +46,7 @@ export class SubagentRecorder {
 						parentMessageId,
 						user: ctx.userId,
 						endpoint: PI_SUBAGENT_ENDPOINT,
-						sender: message.role === "user" ? "User" : "one-pi",
+						sender: message.role === "user" ? "User" : message.role === "toolResult" ? "tool" : "one-pi",
 						isCreatedByUser: message.role === "user",
 						text,
 						model: "one-pi",
@@ -53,7 +55,7 @@ export class SubagentRecorder {
 							isSubagentTrace: true,
 							subagentTaskId: this.task.id,
 							subagentName: this.task.agentName,
-							subagentSeq: this.seq,
+							subagentSeq: seq,
 						},
 					},
 				},
