@@ -55,7 +55,7 @@ export class SubagentScheduler {
 		}));
 	}
 
-	async execute(task: SubagentTask): Promise<SubagentResult> {
+	async execute(task: SubagentTask, onUpdate?: (progress: string) => void): Promise<SubagentResult> {
 		const def = this.registry.get(task.agentName);
 		if (!def) {
 			return {
@@ -116,6 +116,13 @@ export class SubagentScheduler {
 					if (text) finalOutput = text;
 				}
 			}
+			// Forward live progress to the parent's onUpdate callback.
+			// This drives pi's tool_execution_update SSE event, which arp translates
+			// into reasoning_content chunks so the UI shows subagent activity live.
+			if (onUpdate) {
+				const progress = formatProgressEvent(task.agentName, event);
+				if (progress) onUpdate(progress);
+			}
 		});
 
 		try {
@@ -145,8 +152,8 @@ export class SubagentScheduler {
 		}
 	}
 
-	async executeAll(tasks: SubagentTask[]): Promise<SubagentResult[]> {
-		return mapWithConcurrencyLimit(tasks, this.globalConcurrencyLimit, (t) => this.execute(t));
+	async executeAll(tasks: SubagentTask[], onUpdate?: (progress: string) => void): Promise<SubagentResult[]> {
+		return mapWithConcurrencyLimit(tasks, this.globalConcurrencyLimit, (t) => this.execute(t, onUpdate));
 	}
 
 	abort(taskId: string): void {
@@ -168,4 +175,34 @@ export class SubagentScheduler {
 			parentContext,
 		};
 	}
+}
+
+const MAX_PROGRESS_LEN = 400;
+
+/** Format a subagent event as a one-line progress string for live UI streaming. */
+function formatProgressEvent(agentName: string, event: AgentEvent): string | undefined {
+	switch (event.type) {
+		case "message_update": {
+			const e = event.assistantMessageEvent;
+			if (e.type === "text_delta" && e.delta) {
+				return `[${agentName}] ${truncate(e.delta)}`;
+			}
+			if (e.type === "thinking_delta" && e.delta) {
+				return `[${agentName}] (thinking) ${truncate(e.delta)}`;
+			}
+			return undefined;
+		}
+		case "tool_execution_start":
+			return `[${agentName}] tool: ${event.toolName}`;
+		case "tool_execution_end":
+			return `[${agentName}] tool ${event.toolName} ${event.isError ? "failed" : "done"}`;
+		default:
+			return undefined;
+	}
+}
+
+function truncate(text: string): string {
+	const oneLine = text.replace(/\n/g, " ").trim();
+	if (oneLine.length <= MAX_PROGRESS_LEN) return oneLine;
+	return `${oneLine.slice(0, MAX_PROGRESS_LEN)}...`;
 }

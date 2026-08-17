@@ -342,7 +342,14 @@ export async function saveConversationToMongo(
 		const Conversation = getConversationModel();
 		const Message = getMessageModel();
 
-		const messageDocs = await Message.find({ conversationId: ctx.conversationId, user: ctx.userId }, "_id")
+		const messageDocs = await Message.find(
+			{
+				conversationId: ctx.conversationId,
+				user: ctx.userId,
+				"metadata.isSubagentTrace": { $ne: true },
+			},
+			"_id",
+		)
 			.sort({ createdAt: 1 })
 			.lean();
 		const messageObjectIds = messageDocs.map((m) => m._id);

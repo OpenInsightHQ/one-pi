@@ -57,7 +57,7 @@ ${scheduler
 
 Use 'single' mode for one task, 'parallel' mode with 'tasks' array for multiple concurrent tasks.`,
 		parameters: subagentSchema,
-		async execute(_toolCallId, params) {
+		async execute(_toolCallId, params, _signal, onUpdate) {
 			if (params.agentName === "list") {
 				const agents = scheduler.getAvailableAgents();
 				return {
@@ -75,7 +75,12 @@ Use 'single' mode for one task, 'parallel' mode with 'tasks' array for multiple 
 
 			if (mode === "parallel" && params.tasks && params.tasks.length > 0) {
 				const tasks = params.tasks.map((t) => scheduler.createTask(t.agentName, t.prompt, parentContext));
-				const results = await scheduler.executeAll(tasks);
+				const results = await scheduler.executeAll(tasks, (progress) => {
+					onUpdate?.({
+						content: [{ type: "text", text: progress }],
+						details: { mode: "parallel", results: [] },
+					});
+				});
 
 				return {
 					content: [
@@ -89,7 +94,12 @@ Use 'single' mode for one task, 'parallel' mode with 'tasks' array for multiple 
 			}
 
 			const task = scheduler.createTask(params.agentName, params.prompt, parentContext);
-			const result = await scheduler.execute(task);
+			const result = await scheduler.execute(task, (progress) => {
+				onUpdate?.({
+					content: [{ type: "text", text: progress }],
+					details: { mode: "single", results: [] },
+				});
+			});
 
 			return {
 				content: [
