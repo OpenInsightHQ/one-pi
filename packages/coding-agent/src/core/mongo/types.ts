@@ -188,6 +188,41 @@ export interface ConversationDoc {
 }
 
 // ---------------------------------------------------------------------------
+// TaskQueue document (shared with arp/LibreChat taskqueues collection)
+// ---------------------------------------------------------------------------
+
+export interface TaskQueueDoc {
+	_id: import("mongoose").Types.ObjectId;
+	toUserId: string;
+	toAgentId?: string;
+	fromUserId: string;
+	fromAgentId?: string;
+	sourceConversationId?: string;
+	sourceSessionId?: string;
+	sourceTurnSeq?: number;
+	type?: "ai_pending" | "collaboration" | "manual";
+	title: string;
+	description?: string;
+	status?: string;
+	priority?: "low" | "medium" | "high";
+	formType?: "free_text" | "choice" | "form" | "confirmation";
+	choices?: Array<{ label: string; value: string; description?: string }>;
+	fields?: Array<Record<string, unknown>>;
+	formResponse?: Record<string, unknown>;
+	subagentTaskId?: string;
+	subagentName?: string;
+	metadata?: Record<string, unknown>;
+	resultSummary?: string;
+	userResponse?: string;
+	callbackUrl?: string;
+	completedAt?: Date;
+	expiresAt?: Date;
+	createdAt?: Date;
+	updatedAt?: Date;
+	__v?: number;
+}
+
+// ---------------------------------------------------------------------------
 // Resolved principal (used internally by ACL queries)
 // ---------------------------------------------------------------------------
 

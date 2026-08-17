@@ -6,6 +6,7 @@ import type {
 	MessageDoc,
 	RoleDoc,
 	SkillDoc,
+	TaskQueueDoc,
 	UserRoleDoc,
 } from "./types.js";
 
@@ -164,4 +165,40 @@ export const conversationSchema = new Schema<ConversationDoc>(
 		expiredAt: { type: Date },
 	},
 	{ strict: false, timestamps: true, collection: "conversations" },
+);
+
+// ---------------------------------------------------------------------------
+// taskqueues (shared with arp/LibreChat)
+// ---------------------------------------------------------------------------
+
+export const taskQueueSchema = new Schema<TaskQueueDoc>(
+	{
+		toUserId: { type: String, required: true },
+		toAgentId: { type: String },
+		fromUserId: { type: String, required: true },
+		fromAgentId: { type: String },
+		sourceConversationId: { type: String },
+		sourceSessionId: { type: String },
+		sourceTurnSeq: { type: Number },
+		type: { type: String, default: "ai_pending" },
+		title: { type: String, required: true },
+		description: { type: String },
+		status: { type: String, default: "pending" },
+		priority: { type: String, default: "medium" },
+		formType: { type: String, default: "free_text" },
+		choices: { type: [Schema.Types.Mixed], default: undefined },
+		fields: { type: [Schema.Types.Mixed], default: undefined },
+		formResponse: { type: Schema.Types.Mixed, default: {} },
+		subagentTaskId: { type: String },
+		subagentName: { type: String },
+		metadata: { type: Schema.Types.Mixed, default: {} },
+		resultSummary: { type: String },
+		userResponse: { type: String },
+		callbackUrl: { type: String },
+		completedAt: { type: Date },
+		expiresAt: { type: Date },
+	},
+	// Indexes are owned by the arp/LibreChat model definition; strict:false so
+	// fields written by arp routes (e.g. fromUserName joins) are never stripped.
+	{ strict: false, timestamps: true, collection: "taskqueues" },
 );

@@ -6,6 +6,7 @@ import {
 	messageSchema,
 	roleSchema,
 	skillSchema,
+	taskQueueSchema,
 	userRoleSchema,
 } from "./schemas.js";
 import type {
@@ -15,6 +16,7 @@ import type {
 	MessageDoc,
 	RoleDoc,
 	SkillDoc,
+	TaskQueueDoc,
 	UserRoleDoc,
 } from "./types.js";
 
@@ -67,4 +69,10 @@ export function getMessageModel(): MessageModel {
 
 export function getConversationModel(): ConversationModel {
 	return mongoose.model<ConversationDoc>("Conversation", conversationSchema, "conversations");
+}
+
+export type TaskQueueModel = mongoose.Model<TaskQueueDoc>;
+
+export function getTaskQueueModel(): TaskQueueModel {
+	return mongoose.model<TaskQueueDoc>("TaskQueue", taskQueueSchema, "taskqueues");
 }

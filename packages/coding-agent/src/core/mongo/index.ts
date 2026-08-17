@@ -53,7 +53,6 @@ export {
 } from "./conversation-service.js";
 // Connection management
 export { connectMongo, disconnectMongo, getCachedConnection, getDb, isMongoEnabled } from "./db.js";
-
 // Models
 export {
 	type AccessRoleModel,
@@ -65,10 +64,12 @@ export {
 	getMessageModel,
 	getRoleModel,
 	getSkillModel,
+	getTaskQueueModel,
 	getUserRoleModel,
 	type MessageModel,
 	type RoleModel,
 	type SkillModel,
+	type TaskQueueModel,
 	type UserRoleModel,
 } from "./models.js";
 // Schemas (for advanced/custom usage)
@@ -79,9 +80,9 @@ export {
 	messageSchema,
 	roleSchema,
 	skillSchema,
+	taskQueueSchema,
 	userRoleSchema,
 } from "./schemas.js";
-
 // Skill catalog service
 export {
 	type AuthorizedSkill,
@@ -92,6 +93,14 @@ export {
 	getAuthorizedSkills,
 	getSkillIdByName,
 } from "./skill-catalog.js";
+// TaskQueue persistence service
+export {
+	type CreateTaskData,
+	createTaskInMongo,
+	findTasksByConversation,
+	findWaitingAgentTasks,
+	updateTaskStatusInMongo,
+} from "./task-queue-service.js";
 
 // Shared types and constants
 export {
@@ -108,5 +117,6 @@ export {
 	RoleBits,
 	type RoleDoc,
 	type SkillDoc,
+	type TaskQueueDoc,
 	type UserRoleDoc,
 } from "./types.js";

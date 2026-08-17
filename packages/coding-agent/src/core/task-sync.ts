@@ -1,9 +1,14 @@
 /**
- * TaskSync — pi 端与 arp-github TaskQueue 的同步服务。
+ * TaskSync — pi 端任务队列访问层。
  *
- * pi 通过 arp-github 的 /api/task-queue REST API（api-key 认证）创建和更新任务。
- * arp-github 已有 TaskQueue schema 和 requireTaskQueueAuth 中间件（支持 api-key 回退）。
+ * 直接读写 MongoDB `taskqueues` 集合（与 arp/LibreChat 共享），与
+ * conversation-service 的消息持久化模式一致：
+ * - 无 ARP_HOST 网络依赖（容器内 localhost 不可达宿主机的问题不复存在）
+ * - 无 api-key 认证耦合（MongoDB 连接本身就是信任边界）
+ * - 前端通知由 ConversationTaskList 轮询 + arp REST 端点完成
  */
+
+import { createTaskInMongo, findTasksByConversation, isMongoEnabled, updateTaskStatusInMongo } from "./mongo/index.js";
 
 export interface CreateTaskParams {
 	toUserId: string;
@@ -54,116 +59,70 @@ export interface TaskQueueItem {
 }
 
 export class TaskSync {
-	private arpHost: string;
-	private apiKey: string;
-
-	constructor(arpHost?: string, apiKey?: string) {
-		this.arpHost = arpHost ?? process.env.ARP_HOST ?? "http://localhost:3080";
-		this.apiKey = apiKey ?? process.env.PI_API_KEY ?? "";
-	}
-
 	isEnabled(): boolean {
-		return this.apiKey.length > 0;
+		return isMongoEnabled();
 	}
 
-	private headers(userId: string): Record<string, string> {
-		return {
-			"Content-Type": "application/json",
-			"api-key": this.apiKey,
-			"x-user-id": userId,
-		};
-	}
-
+	/** Create a task. Returns the new task _id, or null on failure. */
 	async createTask(params: CreateTaskParams): Promise<string | null> {
-		if (!this.isEnabled()) return null;
-
-		try {
-			const response = await fetch(`${this.arpHost}/api/task-queue`, {
-				method: "POST",
-				headers: this.headers(params.toUserId),
-				body: JSON.stringify(params),
-			});
-
-			if (!response.ok) {
-				console.error("[TaskSync] createTask failed:", response.status, await response.text());
-				return null;
-			}
-
-			const task = (await response.json()) as { _id: string };
-			return task._id;
-		} catch (err) {
-			console.error("[TaskSync] createTask error:", err);
-			return null;
-		}
+		const doc = await createTaskInMongo({
+			toUserId: params.toUserId,
+			fromUserId: params.toUserId, // AI-created tasks: creator identity is the target user
+			fromAgentId: params.fromAgentId,
+			title: params.title,
+			description: params.description,
+			type: params.type ?? "ai_pending",
+			priority: params.priority,
+			formType: params.formType,
+			choices: params.choices,
+			fields: params.fields as Array<Record<string, unknown>> | undefined,
+			sourceConversationId: params.sourceConversationId,
+			sourceSessionId: params.sourceSessionId,
+			sourceTurnSeq: params.sourceTurnSeq,
+			subagentTaskId: params.subagentTaskId,
+			subagentName: params.subagentName,
+		});
+		return doc ? String(doc._id) : null;
 	}
 
-	async getTasksByConversation(conversationId: string, userId: string, status?: string): Promise<TaskQueueItem[]> {
-		if (!this.isEnabled()) return [];
-
-		try {
-			const url = new URL(`${this.arpHost}/api/task-queue/by-conversation/${conversationId}`);
-			if (status) url.searchParams.set("status", status);
-
-			const response = await fetch(url.toString(), {
-				method: "GET",
-				headers: this.headers(userId),
-			});
-
-			if (!response.ok) return [];
-
-			const data = (await response.json()) as { tasks: TaskQueueItem[] };
-			return data.tasks;
-		} catch (err) {
-			console.error("[TaskSync] getTasksByConversation error:", err);
-			return [];
-		}
+	async getTasksByConversation(conversationId: string, status?: string): Promise<TaskQueueItem[]> {
+		const docs = await findTasksByConversation(conversationId, status);
+		return docs.map((d) => ({
+			_id: String(d._id),
+			toUserId: d.toUserId as string,
+			fromUserId: d.fromUserId as string,
+			title: d.title as string,
+			description: d.description as string | undefined,
+			status: (d.status as string) ?? "pending",
+			type: (d.type as string) ?? "ai_pending",
+			formType: d.formType as string | undefined,
+			choices: d.choices as TaskQueueItem["choices"],
+			fields: d.fields as TaskFormField[] | undefined,
+			formResponse: d.formResponse as Record<string, unknown> | undefined,
+			sourceConversationId: d.sourceConversationId as string | undefined,
+			sourceSessionId: d.sourceSessionId as string | undefined,
+			resultSummary: d.resultSummary as string | undefined,
+			userResponse: d.userResponse as string | undefined,
+			subagentTaskId: d.subagentTaskId as string | undefined,
+			subagentName: d.subagentName as string | undefined,
+			createdAt: String(d.createdAt ?? ""),
+			updatedAt: String(d.updatedAt ?? ""),
+		}));
 	}
 
-	async startTask(taskId: string, userId: string): Promise<void> {
-		if (!this.isEnabled()) return;
-
-		try {
-			await fetch(`${this.arpHost}/api/task-queue/${taskId}/start`, {
-				method: "POST",
-				headers: this.headers(userId),
-			});
-		} catch (err) {
-			console.error("[TaskSync] startTask error:", err);
-		}
+	async getPendingTasks(conversationId: string): Promise<TaskQueueItem[]> {
+		return this.getTasksByConversation(conversationId, "waiting_agent");
 	}
 
-	async completeTask(taskId: string, userId: string, resultSummary: string): Promise<void> {
-		if (!this.isEnabled()) return;
-
-		try {
-			await fetch(`${this.arpHost}/api/task-queue/${taskId}`, {
-				method: "PATCH",
-				headers: this.headers(userId),
-				body: JSON.stringify({ status: "completed", resultSummary }),
-			});
-		} catch (err) {
-			console.error("[TaskSync] completeTask error:", err);
-		}
+	async updateTaskStatus(taskId: string, status: string, resultSummary?: string): Promise<boolean> {
+		return updateTaskStatusInMongo(taskId, status, resultSummary);
 	}
 
-	async getPendingTasks(conversationId: string, userId: string): Promise<TaskQueueItem[]> {
-		return this.getTasksByConversation(conversationId, userId, "waiting_agent");
+	async startTask(taskId: string): Promise<boolean> {
+		return updateTaskStatusInMongo(taskId, "running");
 	}
 
-	async updateTaskStatus(taskId: string, userId: string, status: string, resultSummary?: string): Promise<void> {
-		if (!this.isEnabled()) return;
-
-		try {
-			const body: Record<string, unknown> = { status };
-			if (resultSummary) body.resultSummary = resultSummary;
-
-			await fetch(`${this.arpHost}/api/task-queue/${taskId}`, {
-				method: "PATCH",
-				headers: this.headers(userId),
-				body: JSON.stringify(body),
-			});
-		} catch (err) {
-			console.error("[TaskSync] updateTaskStatus error:", err);
-		}
+	async completeTask(taskId: string, resultSummary: string): Promise<boolean> {
+		return updateTaskStatusInMongo(taskId, "completed", resultSummary);
 	}
 }

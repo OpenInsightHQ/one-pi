@@ -2589,8 +2589,7 @@ export class AgentSession {
 			// Prefer the persistence conversationId (= arp/LibreChat conversationId).
 			// sessionManager.getSessionId() is pi's internal session-file UUID and does
 			// NOT match the conversationId the frontend uses to look up tasks.
-			sessionId:
-				this._conversationPersistence?.conversationId ?? this.sessionManager.getSessionId(),
+			sessionId: this._conversationPersistence?.conversationId ?? this.sessionManager.getSessionId(),
 			userId: this._conversationPersistence?.userId ?? "unknown",
 			agentId: this._conversationPersistence?.agentId ?? "unknown",
 			cwd: this._cwd,

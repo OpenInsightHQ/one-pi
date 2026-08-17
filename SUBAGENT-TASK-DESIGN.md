@@ -312,17 +312,22 @@ pending ──accepted──► in_progress ──► waiting_agent ──► ru
 
 ### 3.4 pi 端 TaskSync（packages/coding-agent/src/core/task-sync.ts）
 
-pi 端通过 arp-github 的 `/api/task-queue` REST API（api-key 认证，已支持）同步任务：
+pi 端**直接读写 MongoDB `taskqueues` 集合**（`mongo/task-queue-service.ts`），与
+messages/conversations 持久化模式一致：
+
+- 无 ARP_HOST 网络依赖（避免容器内 localhost 不可达宿主机的问题）
+- 无 api-key 认证耦合（MongoDB 连接即信任边界，同消息写入）
+- arp REST 端点保留给前端/管理用途；pi 是 AI 侧写路径
 
 ```typescript
 export class TaskSync {
-	constructor(private arpHost: string, private apiKey: string) {}
-
-	async createTask(params: CreateTaskParams): Promise<string>;
-	async getTasksByConversation(conversationId: string, status?: string): Promise<TaskQueueItem[]>;
-	async startTask(taskId: string): Promise<void>;
-	async completeTask(taskId: string, resultSummary: string): Promise<void>;
-	async getPendingTasks(conversationId: string): Promise<TaskQueueItem[]>;
+	isEnabled(): boolean;                          // = isMongoEnabled()
+	async createTask(params): Promise<string>;     // 直插 taskqueues
+	async getTasksByConversation(convId, status?); // 直查
+	async getPendingTasks(convId);                 // waiting_agent 状态
+	async updateTaskStatus(taskId, status, summary?);
+	async startTask(taskId);                       // → running
+	async completeTask(taskId, summary);           // → completed
 }
 ```
 
