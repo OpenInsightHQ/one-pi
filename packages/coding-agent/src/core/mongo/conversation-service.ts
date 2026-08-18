@@ -358,7 +358,12 @@ export async function saveConversationToMongo(
 			user: ctx.userId,
 			messages: messageObjectIds,
 			endpoint: PI_ENDPOINT,
-			endpointType: PI_ENDPOINT,
+			// arp/LibreChat frontend validates endpointType against the strict
+			// EModelEndpoint zod enum ('pi' is not a member). The pi endpoint is
+			// a librechat.yaml custom endpoint, so arp writes 'custom' — we must
+			// match, otherwise createPayload's tConvoUpdateSchema.parse throws
+			// ZodError when the user sends a message in a pi-written conversation.
+			endpointType: "custom",
 			agent_id: PI_CONVO_AGENT_ID,
 			model: PI_MODEL,
 			cwd: ctx.cwd,
