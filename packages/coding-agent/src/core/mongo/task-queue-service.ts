@@ -67,7 +67,10 @@ export async function findTasksByConversation(
 
 	try {
 		const TaskQueue = getTaskQueueModel();
-		const filter: Record<string, unknown> = { sourceConversationId: conversationId };
+		const filter: Record<string, unknown> = {
+			sourceConversationId: conversationId,
+			cleared: { $ne: true },
+		};
 		if (status) filter.status = status;
 		const docs = await TaskQueue.find(filter).sort({ createdAt: 1 }).lean();
 		return docs as unknown as Record<string, unknown>[];
