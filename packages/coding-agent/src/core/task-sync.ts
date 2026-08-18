@@ -17,7 +17,7 @@ export interface CreateTaskParams {
 	description?: string;
 	type?: "ai_pending" | "collaboration" | "manual" | "subagent";
 	formType?: "free_text" | "choice" | "form" | "confirmation";
-	choices?: { label: string; value: string; description?: string }[];
+	choices?: { label: string; value: string; description?: string; isCancel?: boolean }[];
 	fields?: TaskFormField[];
 	sourceConversationId?: string;
 	sourceSessionId?: string;
@@ -45,7 +45,7 @@ export interface TaskQueueItem {
 	status: string;
 	type: string;
 	formType?: string;
-	choices?: { label: string; value: string; description?: string }[];
+	choices?: { label: string; value: string; description?: string; isCancel?: boolean }[];
 	fields?: TaskFormField[];
 	formResponse?: Record<string, unknown>;
 	sourceConversationId?: string;

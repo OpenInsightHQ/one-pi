@@ -39,8 +39,17 @@ const createTaskSchema = Type.Object({
 				label: Type.String({ description: "Display label" }),
 				value: Type.String({ description: "Value to submit" }),
 				description: Type.Optional(Type.String({ description: "Optional explanation" })),
+				isCancel: Type.Optional(
+					Type.Boolean({
+						description:
+							"Mark this option as cancel semantics (e.g. '取消'/'Cancel'/'取消'/'None of the above'). Selecting it rejects the task immediately as a terminal state instead of waiting for AI processing.",
+					}),
+				),
 			}),
-			{ description: "For 'choice' formType: available options" },
+			{
+				description:
+					"For 'choice' formType: available options. Mark exactly one cancel-like option with isCancel=true if the plan can be abandoned.",
+			},
 		),
 	),
 	fields: Type.Optional(

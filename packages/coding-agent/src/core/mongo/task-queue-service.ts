@@ -85,6 +85,53 @@ export async function findWaitingAgentTasks(conversationId: string): Promise<Rec
 	return findTasksByConversation(conversationId, "waiting_agent");
 }
 
+export interface AiTaskPickup {
+	/** User responded; AI must consume the response this turn. */
+	waiting: Record<string, unknown>[];
+	/** Already-terminal tasks (e.g. user cancelled) the AI has not been told about yet. */
+	informational: Record<string, unknown>[];
+}
+
+/**
+ * Collect task responses to inject into the next prompt:
+ * - waiting_agent tasks: injected, then transitioned running -> completed
+ * - rejected/dismissed tasks not yet flagged metadata.aiNotified: injected once
+ *   so the AI learns the user cancelled, then flagged
+ */
+export async function findTasksForAiPickup(conversationId: string): Promise<AiTaskPickup> {
+	if (!isMongoEnabled()) return { waiting: [], informational: [] };
+
+	try {
+		const TaskQueue = getTaskQueueModel();
+		const waiting = await findTasksByConversation(conversationId, "waiting_agent");
+		const informational = (await TaskQueue.find({
+			sourceConversationId: conversationId,
+			status: { $in: ["rejected", "dismissed"] },
+			"metadata.aiNotified": { $ne: true },
+			cleared: { $ne: true },
+		})
+			.sort({ updatedAt: -1 })
+			.limit(10)
+			.lean()) as unknown as Record<string, unknown>[];
+		return { waiting, informational };
+	} catch (err) {
+		console.error("[MongoDB] Error collecting tasks for AI pickup:", err);
+		return { waiting: [], informational: [] };
+	}
+}
+
+/** Flag a terminal task as already delivered to the AI (prevents re-injection). */
+export async function markTaskAiNotified(taskId: string): Promise<void> {
+	if (!isMongoEnabled()) return;
+
+	try {
+		const TaskQueue = getTaskQueueModel();
+		await TaskQueue.updateOne({ _id: taskId }, { $set: { "metadata.aiNotified": true } });
+	} catch (err) {
+		console.error("[MongoDB] Error marking task aiNotified:", err);
+	}
+}
+
 /** Update task status (and optional resultSummary). Returns success. */
 export async function updateTaskStatusInMongo(
 	taskId: string,

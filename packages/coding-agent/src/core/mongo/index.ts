@@ -95,10 +95,13 @@ export {
 } from "./skill-catalog.js";
 // TaskQueue persistence service
 export {
-	type CreateTaskData,
 	createTaskInMongo,
+	type CreateTaskData,
 	findTasksByConversation,
+	type AiTaskPickup,
+	findTasksForAiPickup,
 	findWaitingAgentTasks,
+	markTaskAiNotified,
 	updateTaskStatusInMongo,
 } from "./task-queue-service.js";
 

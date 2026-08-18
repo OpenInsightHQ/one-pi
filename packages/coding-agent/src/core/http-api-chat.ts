@@ -26,6 +26,7 @@ import {
 } from "./http-api-shared.js";
 import { type CreateAgentSessionOptions, createAgentSession } from "./sdk.js";
 import { findMostRecentSession, SessionManager } from "./session-manager.js";
+import { findTasksForAiPickup, markTaskAiNotified, updateTaskStatusInMongo } from "./mongo/task-queue-service.js";
 import { createLibreChatTools } from "./tools/document-generator.js";
 import { getCachedMCPTools } from "./tools/mcp-registry.js";
 
@@ -294,10 +295,45 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 
 	session.setMessageIds(body.userMessageId, body.responseMessageId);
 
+	// Task response pickup: inject user's task-panel responses (waiting_agent)
+	// and unnotified cancellations into this prompt, then close the loop.
+	const pickup = await findTasksForAiPickup(sessionId);
+	let taskPrefix = "";
+	if (pickup.waiting.length > 0 || pickup.informational.length > 0) {
+		const blocks: string[] = [];
+		for (const t of pickup.waiting) {
+			blocks.push(
+				`<task_response id="${t._id}" title="${t.title}" status="waiting_agent">\nuser response: ${
+					(t.userResponse as string) || JSON.stringify(t.formResponse ?? {})
+				}\n</task_response>`,
+			);
+		}
+		for (const t of pickup.informational) {
+			blocks.push(
+				`<task_response id="${t._id}" title="${t.title}" status="${t.status}">\nuser response: ${
+					(t.userResponse as string) || JSON.stringify(t.formResponse ?? {})
+				}\n</task_response>`,
+			);
+			markTaskAiNotified(String(t._id)).catch(() => {});
+		}
+		taskPrefix = `<task_responses>\n${blocks.join("\n")}\n</task_responses>\n\nThe user answered task-panel tasks above. Account for these responses when handling the message below.\n\n`;
+		console.log(
+			`[HTTP] /prompt: injecting ${pickup.waiting.length} waiting + ${pickup.informational.length} informational task responses`,
+		);
+	}
+	for (const t of pickup.waiting) {
+		updateTaskStatusInMongo(String(t._id), "running").catch(() => {});
+	}
+
 	try {
-		await session.prompt(body.message, {
+		await session.prompt(taskPrefix + body.message, {
 			appendSystemPrompt: (body.systemPrompt ?? "") + dmpSystemSuffix,
 		});
+
+		// The AI has consumed the responses this turn; close the tasks out.
+		for (const t of pickup.waiting) {
+			updateTaskStatusInMongo(String(t._id), "completed", "processed in agent turn").catch(() => {});
+		}
 
 		await new Promise<void>((resolve) => {
 			const checkDone = (): void => {
