@@ -57,7 +57,7 @@ function formatResult(result: SubagentResult): string {
 function syncTaskStatus(taskId: string | undefined, result: SubagentResult): void {
 	if (!taskId) return;
 	const status = result.success ? "completed" : "failed";
-	const summary = (result.success ? result.finalOutput : result.error ?? "").slice(0, MAX_SUMMARY_LEN);
+	const summary = (result.success ? result.finalOutput : (result.error ?? "")).slice(0, MAX_SUMMARY_LEN);
 	updateTaskStatusInMongo(taskId, status, summary).catch(() => {});
 }
 
