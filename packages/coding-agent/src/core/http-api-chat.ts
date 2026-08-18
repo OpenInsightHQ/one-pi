@@ -24,9 +24,9 @@ import {
 	sendJson,
 	sendSSE,
 } from "./http-api-shared.js";
+import { findTasksForAiPickup, markTaskAiNotified, updateTaskStatusInMongo } from "./mongo/task-queue-service.js";
 import { type CreateAgentSessionOptions, createAgentSession } from "./sdk.js";
 import { findMostRecentSession, SessionManager } from "./session-manager.js";
-import { findTasksForAiPickup, markTaskAiNotified, updateTaskStatusInMongo } from "./mongo/task-queue-service.js";
 import { createLibreChatTools } from "./tools/document-generator.js";
 import { getCachedMCPTools } from "./tools/mcp-registry.js";
 
@@ -127,7 +127,7 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 
 			console.log(`[HTTP] Creating session with model: ${defaultHttpModel?.provider}/${defaultHttpModel?.id}`);
 
-			const resourceLoader = await createHttpResourceLoader(userId, cwd);
+			const resourceLoader = await createHttpResourceLoader(userId, cwd, agentId);
 
 			let authStorage: AuthStorage | undefined;
 			if (httpModelConfig?.apiKey && defaultHttpModel) {
@@ -146,7 +146,7 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 				forceModel: true,
 				resourceLoader,
 				authStorage,
-				skillPathGuard: createSkillPathGuard(userId),
+				skillPathGuard: createSkillPathGuard(userId, agentId),
 				conversationPersistence: { userId, agentId, conversationId: sessionId, cwd },
 			};
 			const result = await createAgentSession(options);
@@ -456,7 +456,7 @@ export async function handleChatCompletions(req: IncomingMessage, res: ServerRes
 				sessionManager = SessionManager.create(cwd, sessionDir);
 			}
 
-			const resourceLoader = await createHttpResourceLoader(userId, cwd);
+			const resourceLoader = await createHttpResourceLoader(userId, cwd, agentId);
 
 			let authStorage: AuthStorage | undefined;
 			if (httpModelConfig?.apiKey && defaultHttpModel) {
@@ -475,7 +475,7 @@ export async function handleChatCompletions(req: IncomingMessage, res: ServerRes
 				forceModel: true,
 				resourceLoader,
 				authStorage,
-				skillPathGuard: createSkillPathGuard(userId),
+				skillPathGuard: createSkillPathGuard(userId, agentId),
 				conversationPersistence: { userId, agentId, conversationId: sessionId, cwd },
 			};
 

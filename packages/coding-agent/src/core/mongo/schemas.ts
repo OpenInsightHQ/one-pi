@@ -2,6 +2,7 @@ import { Schema } from "mongoose";
 import type {
 	AccessRoleDoc,
 	AclEntryDoc,
+	AgentDoc,
 	ConversationDoc,
 	MessageDoc,
 	RoleDoc,
@@ -108,6 +109,22 @@ export const roleSchema = new Schema<RoleDoc>(
 	{ strict: false, timestamps: true, collection: "roles" },
 );
 roleSchema.index({ name: 1 });
+
+// ---------------------------------------------------------------------------
+// agents (shared with arp/LibreChat)
+// ---------------------------------------------------------------------------
+
+export const agentSchema = new Schema<AgentDoc>(
+	{
+		id: { type: String, required: true },
+		name: { type: String },
+		description: { type: String },
+		skills: { type: [{ name: String, description: String }], default: undefined },
+	},
+	// Collection is owned by arp/LibreChat; strict:false so arp-written fields
+	// are preserved on read. Indexes are owned by the arp model definition.
+	{ strict: false, timestamps: true, collection: "agents" },
+);
 
 // ---------------------------------------------------------------------------
 // messages (shared with arp/LibreChat)

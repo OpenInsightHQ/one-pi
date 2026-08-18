@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
 import { checkPermission, findAccessibleResourceIds } from "./acl.js";
 import { getDb, isMongoEnabled } from "./db.js";
-import { getSkillModel } from "./models.js";
-import type { SkillDoc } from "./types.js";
+import { getAgentModel, getSkillModel } from "./models.js";
+import type { AgentDoc, SkillDoc } from "./types.js";
 import { PermissionBits, type Principal, ResourceType } from "./types.js";
 
 /**
@@ -156,6 +156,80 @@ export async function checkSkillPermission(userId: string, skillName: string): P
 	if (!skillId) return true; // Not a MongoDB-cataloged skill → no ACL check
 
 	return checkPermission(userId, ResourceType.SKILL, skillId, PermissionBits.VIEW);
+}
+
+// ---------------------------------------------------------------------------
+// Agent-based skill authorization (arp agent principals)
+// ---------------------------------------------------------------------------
+
+/** Prefix that marks an agentId as an arp agent principal (e.g. `agent_s917T8qpLYVrXzDxIpu4j`). */
+export const AGENT_ID_PREFIX = "agent_";
+
+/**
+ * Type guard: true when `agentId` identifies an arp agent (starts with
+ * `agent_`). Agent principals authorize skills via the agent document's
+ * `skills` field instead of the user ACL.
+ */
+export function isAgentPrincipalId(agentId: string | null | undefined): agentId is string {
+	return typeof agentId === "string" && agentId.startsWith(AGENT_ID_PREFIX);
+}
+
+/**
+ * Returns the skill names assigned to the given arp agent (the `skills` field
+ * of the `agents` collection), or null when the agent document does not exist.
+ */
+export async function getAgentSkillNames(agentId: string): Promise<string[] | null> {
+	if (!isMongoEnabled()) return null;
+	await getDb();
+
+	const Agent = getAgentModel();
+	const doc: AgentDoc | null = await Agent.findOne({ id: agentId }).select("skills").lean().exec();
+	if (!doc) return null;
+
+	const skills = doc.skills ?? [];
+	return skills.map((s) => s?.name).filter((name): name is string => typeof name === "string" && name.length > 0);
+}
+
+/**
+ * Returns the on-disk skill directories (`savePath`) for the skills assigned
+ * to the given arp agent. Skill names are resolved against the `skills`
+ * collection; only active skills with an existing `savePath` are included.
+ */
+export async function getAgentSkillDirs(agentId: string): Promise<string[]> {
+	const names = await getAgentSkillNames(agentId);
+	if (!names || names.length === 0) return [];
+
+	await getDb();
+	const Skill = getSkillModel();
+	const docs: SkillDoc[] = await Skill.find({ name: { $in: names }, status: 1 })
+		.lean()
+		.exec();
+
+	const dirs = new Set<string>();
+	for (const doc of docs) {
+		const skill = toAuthorizedSkill(doc);
+		if (skill) dirs.add(skill.savePath);
+	}
+	return [...dirs];
+}
+
+/**
+ * Checks whether the given arp agent has the named skill assigned in its
+ * `skills` field. Returns true if:
+ *   - MongoDB is not configured (personal-skills-only mode — no ACL), OR
+ *   - The agent document lists the skill name.
+ *
+ * Returns false when the agent document is missing or does not include the
+ * skill — the caller must treat this as "skill does not exist or no
+ * permission" and fail fast without fallback.
+ */
+export async function checkAgentSkillPermission(agentId: string, skillName: string): Promise<boolean> {
+	if (!isMongoEnabled()) return true;
+
+	const names = await getAgentSkillNames(agentId);
+	if (names === null) return false; // Agent document not found → deny
+
+	return names.includes(skillName);
 }
 
 /**

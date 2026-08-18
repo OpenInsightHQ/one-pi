@@ -6,7 +6,13 @@ import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { getAgentDir, getSessionsDir } from "../config.js";
 import type { AgentSession } from "./agent-session.js";
-import { checkSkillPermission, getAuthorizedSkillDirs } from "./mongo/index.js";
+import {
+	checkAgentSkillPermission,
+	checkSkillPermission,
+	getAgentSkillDirs,
+	getAuthorizedSkillDirs,
+	isAgentPrincipalId,
+} from "./mongo/index.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
 import type { CreateAgentSessionOptions } from "./sdk.js";
@@ -198,7 +204,20 @@ export function validatePathWithinCwd(cwd: string, inputPath: string): string {
 	return resolved;
 }
 
-export async function createHttpResourceLoader(userId: string, cwd: string): Promise<ResourceLoader> {
+/**
+ * Builds the {@link ResourceLoader} for an HTTP API session.
+ *
+ * Skill visibility depends on the principal:
+ *   - `agentId` starting with `agent_` (arp agent): only the skills listed in
+ *     the agent document's `skills` field (MongoDB `agents` collection) are
+ *     loaded. The user ACL is NOT consulted.
+ *   - Otherwise: skills the user has VIEW permission on (ACL), as before.
+ */
+export async function createHttpResourceLoader(
+	userId: string,
+	cwd: string,
+	agentId?: string | null,
+): Promise<ResourceLoader> {
 	const agentDir = getAgentDir();
 	const additionalSkillPaths: string[] = [];
 
@@ -208,19 +227,32 @@ export async function createHttpResourceLoader(userId: string, cwd: string): Pro
 		additionalSkillPaths.push(userSkillsDir);
 	}
 
-	// (2) Authorized skills — fetched from MongoDB and filtered by ACL permissions.
-	//     The `skills` collection stores metadata + savePath; SKILL.md lives on disk.
+	// (2) Authorized skills — fetched from MongoDB. Agent principals (`agent_*`)
+	//     resolve skills from the agent document; user principals use the ACL.
 	//     If MongoDB is not configured or the query fails, we gracefully continue
 	//     with personal skills only.
-	try {
-		const authorizedDirs = await getAuthorizedSkillDirs(userId);
-		additionalSkillPaths.push(...authorizedDirs);
-		if (authorizedDirs.length > 0) {
-			console.log(`[HTTP] Loaded ${authorizedDirs.length} authorized skill(s) from MongoDB for user ${userId}`);
+	if (isAgentPrincipalId(agentId)) {
+		try {
+			const agentDirs = await getAgentSkillDirs(agentId);
+			additionalSkillPaths.push(...agentDirs);
+			if (agentDirs.length > 0) {
+				console.log(`[HTTP] Loaded ${agentDirs.length} skill(s) assigned to agent ${agentId} from MongoDB`);
+			}
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			console.warn(`[HTTP] Failed to load skills for agent ${agentId} from MongoDB: ${msg}`);
 		}
-	} catch (error) {
-		const msg = error instanceof Error ? error.message : String(error);
-		console.warn(`[HTTP] Failed to load authorized skills from MongoDB for user ${userId}: ${msg}`);
+	} else {
+		try {
+			const authorizedDirs = await getAuthorizedSkillDirs(userId);
+			additionalSkillPaths.push(...authorizedDirs);
+			if (authorizedDirs.length > 0) {
+				console.log(`[HTTP] Loaded ${authorizedDirs.length} authorized skill(s) from MongoDB for user ${userId}`);
+			}
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			console.warn(`[HTTP] Failed to load authorized skills from MongoDB for user ${userId}: ${msg}`);
+		}
 	}
 
 	const loader = new DefaultResourceLoader({ cwd, agentDir, additionalSkillPaths });
@@ -229,14 +261,23 @@ export async function createHttpResourceLoader(userId: string, cwd: string): Pro
 }
 
 /**
- * Creates a {@link PathGuard} that enforces per-user skill ACLs on paths under
- * {@link SKILL_REPO_BASE_DIR}. Paths outside the skill repo are always allowed.
+ * Creates a {@link PathGuard} that enforces per-principal skill ACLs on paths
+ * under {@link SKILL_REPO_BASE_DIR}. Paths outside the skill repo are always
+ * allowed.
+ *
+ * Authorization source:
+ *   - `agentId` starting with `agent_` (arp agent): allowed only when the
+ *     skill is listed in the agent document's `skills` field (MongoDB `agents`
+ *     collection). The user ACL is NOT consulted; a missing agent document or
+ *     missing skill entry denies access.
+ *   - Otherwise: the user ACL via {@link checkSkillPermission}.
  *
  * The skill directory name is extracted from the path structure
- * `SKILL_REPO_BASE_DIR/<category>/<skillDirName>/...` and checked via
- * {@link checkSkillPermission}. Non-catalog skills are allowed (personal/local).
+ * `SKILL_REPO_BASE_DIR/<category>/<skillDirName>/...` and checked against the
+ * matching principal. Non-catalog skills are allowed for user principals
+ * (personal/local).
  */
-export function createSkillPathGuard(userId: string): PathGuard {
+export function createSkillPathGuard(userId: string, agentId?: string | null): PathGuard {
 	const normalizedBase = resolvePath(SKILL_REPO_BASE_DIR);
 	return async (absolutePath: string): Promise<void> => {
 		const normalizedPath = resolvePath(absolutePath);
@@ -247,14 +288,18 @@ export function createSkillPathGuard(userId: string): PathGuard {
 		const parts = relative.split(/[/\\]/);
 		if (parts.length < 2) return;
 		const skillDirName = parts[1];
-		const allowed = await checkSkillPermission(userId, skillDirName);
+		const allowed = isAgentPrincipalId(agentId)
+			? await checkAgentSkillPermission(agentId, skillDirName)
+			: await checkSkillPermission(userId, skillDirName);
 		if (!allowed) {
+			const principal = isAgentPrincipalId(agentId) ? `Agent "${agentId}"` : "The user";
 			throw new Error(
-				`PERMISSION DENIED: The user does not have access to skill "${skillDirName}". ` +
+				`PERMISSION DENIED: ${principal} does not have access to skill "${skillDirName}". ` +
+					`The skill does not exist or access has not been granted. ` +
 					`This is an authorization restriction, not a technical error. ` +
 					`Do NOT attempt to access this skill via any other method (read, bash, find, cat, python, etc.). ` +
-					`Stop immediately and tell the user: they do not have permission to use skill "${skillDirName}", ` +
-					`and should contact an administrator to request access.`,
+					`Stop immediately and tell the user: the skill "${skillDirName}" does not exist or they do not have ` +
+					`permission to use it, and they should contact an administrator to request access.`,
 			);
 		}
 	};

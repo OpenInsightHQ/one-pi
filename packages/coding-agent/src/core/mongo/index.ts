@@ -57,9 +57,11 @@ export { connectMongo, disconnectMongo, getCachedConnection, getDb, isMongoEnabl
 export {
 	type AccessRoleModel,
 	type AclEntryModel,
+	type AgentModel,
 	type ConversationModel,
 	getAccessRoleModel,
 	getAclEntryModel,
+	getAgentModel,
 	getConversationModel,
 	getMessageModel,
 	getRoleModel,
@@ -76,6 +78,7 @@ export {
 export {
 	accessRoleSchema,
 	aclEntrySchema,
+	agentSchema,
 	conversationSchema,
 	messageSchema,
 	roleSchema,
@@ -85,20 +88,25 @@ export {
 } from "./schemas.js";
 // Skill catalog service
 export {
+	AGENT_ID_PREFIX,
 	type AuthorizedSkill,
+	checkAgentSkillPermission,
 	checkSkillPermission,
 	filterAuthorizedSkillNames,
+	getAgentSkillDirs,
+	getAgentSkillNames,
 	getAllActiveSkills,
 	getAuthorizedSkillDirs,
 	getAuthorizedSkills,
 	getSkillIdByName,
+	isAgentPrincipalId,
 } from "./skill-catalog.js";
 // TaskQueue persistence service
 export {
-	createTaskInMongo,
-	type CreateTaskData,
-	findTasksByConversation,
 	type AiTaskPickup,
+	type CreateTaskData,
+	createTaskInMongo,
+	findTasksByConversation,
 	findTasksForAiPickup,
 	findWaitingAgentTasks,
 	markTaskAiNotified,
@@ -109,6 +117,8 @@ export {
 export {
 	type AccessRoleDoc,
 	type AclEntryDoc,
+	type AgentDoc,
+	type AgentSkillRef,
 	type ConversationDoc,
 	hasPermissions,
 	type MessageDoc,

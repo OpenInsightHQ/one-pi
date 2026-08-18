@@ -128,6 +128,30 @@ export interface RoleDoc {
 }
 
 // ---------------------------------------------------------------------------
+// Agent document (shared with arp/LibreChat `agents` collection)
+// ---------------------------------------------------------------------------
+
+/** Skill reference embedded in an arp agent document (`agents.skills`). */
+export interface AgentSkillRef {
+	name: string;
+	description?: string;
+}
+
+export interface AgentDoc {
+	_id: import("mongoose").Types.ObjectId;
+	/** String agent identifier, e.g. `agent_s917T8qpLYVrXzDxIpu4j` */
+	id: string;
+	name?: string;
+	description?: string;
+	/** Skills executable by this agent — the agent-side permission list */
+	skills?: AgentSkillRef[];
+	createdAt?: Date;
+	updatedAt?: Date;
+	__v?: number;
+	_class?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Conversation & Message documents (shared with arp/LibreChat)
 // ---------------------------------------------------------------------------
 

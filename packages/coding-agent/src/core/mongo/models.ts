@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import {
 	accessRoleSchema,
 	aclEntrySchema,
+	agentSchema,
 	conversationSchema,
 	messageSchema,
 	roleSchema,
@@ -12,6 +13,7 @@ import {
 import type {
 	AccessRoleDoc,
 	AclEntryDoc,
+	AgentDoc,
 	ConversationDoc,
 	MessageDoc,
 	RoleDoc,
@@ -61,6 +63,12 @@ export function getUserRoleModel(): UserRoleModel {
 
 export function getRoleModel(): RoleModel {
 	return mongoose.model<RoleDoc>("Role", roleSchema, "roles");
+}
+
+export type AgentModel = mongoose.Model<AgentDoc>;
+
+export function getAgentModel(): AgentModel {
+	return mongoose.model<AgentDoc>("Agent", agentSchema, "agents");
 }
 
 export function getMessageModel(): MessageModel {

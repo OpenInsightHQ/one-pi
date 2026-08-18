@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
 	createReadStream,
+	type Dirent,
 	existsSync,
 	mkdirSync,
 	readdirSync,
@@ -112,7 +113,7 @@ export async function handleUpload(req: IncomingMessage, res: ServerResponse): P
 			const allTools = [...libreChatTools, ...getCachedMCPTools(), ...getHttpSkillAgentTools()];
 			const sessionDir = join(cwd, ".pi", "sessions");
 			const sessionManager = SessionManager.create(cwd, sessionDir);
-			const resourceLoader = await createHttpResourceLoader(userId, cwd);
+			const resourceLoader = await createHttpResourceLoader(userId, cwd, agentId);
 
 			let authStorage: AuthStorage | undefined;
 			if (httpModelConfig?.apiKey && defaultHttpModel) {
@@ -131,7 +132,7 @@ export async function handleUpload(req: IncomingMessage, res: ServerResponse): P
 				forceModel: true,
 				resourceLoader,
 				authStorage,
-				skillPathGuard: createSkillPathGuard(userId),
+				skillPathGuard: createSkillPathGuard(userId, agentId),
 				conversationPersistence: { userId, agentId, conversationId: sessionId, cwd },
 			};
 			const result = await createAgentSession(options);
@@ -261,7 +262,7 @@ function listRecursive(
 
 	function walk(dir: string, prefix: string): RecursiveEntry[] {
 		const out: RecursiveEntry[] = [];
-		let entries;
+		let entries: Dirent[];
 		try {
 			entries = readdirSync(dir, { withFileTypes: true });
 		} catch {
