@@ -680,12 +680,19 @@ export class AgentSession {
 					parentMessageId,
 					this._providedUserMessageId,
 				);
-				if (messageId) {
+				const userText = this._getUserMessageText(message as Message);
+				const isHiddenInjection = userText.startsWith("/skill:") || userText.startsWith("<task_responses>");
+				if (messageId && !isHiddenInjection) {
+					// Hidden machine injections (skill commands, task context blocks)
+					// must NOT advance the tree cursor: they are filtered from the
+					// visible tree, so a child mounted under one would orphan when
+					// the parent is filtered. Keep the cursor at the pinned mount
+					// point so the following assistant reply attaches there.
 					this._lastMongoMessageId = messageId;
 				}
 				const convoOptions: { title?: string; finishReason?: string } = {};
-				if (wasNewConversation) {
-					convoOptions.title = deriveTitle(this._getUserMessageText(message as Message));
+				if (wasNewConversation && !isHiddenInjection) {
+					convoOptions.title = deriveTitle(userText);
 				}
 				await saveConversationToMongo(this._conversationPersistence, convoOptions);
 				return;
