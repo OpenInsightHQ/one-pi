@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { join } from "node:path";
 import { getAgentDir, getPromptsDir } from "../config.js";
 import type { AgentSession } from "./agent-session.js";
-import { handleChatCompletions, handlePrompt } from "./http-api-chat.js";
+import { handleChatCompletions, handleExecuteAgentSkill, handlePrompt } from "./http-api-chat.js";
 import {
 	handleFilesBatchDelete,
 	handleFilesBatchDownload,
@@ -63,7 +63,7 @@ import {
 import { connectMongo } from "./mongo/index.js";
 import { addAllowedReadPrefix } from "./tools/path-utils.js";
 
-export { handleChatCompletions, handlePrompt } from "./http-api-chat.js";
+export { handleChatCompletions, handleExecuteAgentSkill, handlePrompt } from "./http-api-chat.js";
 export {
 	handleFilesBatchDelete,
 	handleFilesBatchDownload,
@@ -342,6 +342,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
 	if (pathname === "/prompt" && req.method === "POST") {
 		await handlePrompt(req, res);
+		return;
+	}
+
+	if (pathname === "/execute-agent-skill" && req.method === "POST") {
+		await handleExecuteAgentSkill(req, res);
 		return;
 	}
 

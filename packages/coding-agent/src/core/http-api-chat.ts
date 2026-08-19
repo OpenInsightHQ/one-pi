@@ -37,30 +37,91 @@ import { createLibreChatTools } from "./tools/document-generator.js";
 import { getCachedMCPTools } from "./tools/mcp-registry.js";
 import { type AggregatedUsage, aggregateUsage } from "./usage-aggregation.js";
 
+interface PromptRequestBody {
+	message: string;
+	agentId: string;
+	sessionId?: string;
+	cwd?: string;
+	stream?: boolean;
+	systemPrompt?: string;
+	userMessageId?: string;
+	responseMessageId?: string;
+	/** Pin the Mongo message-tree mount point for this turn (leaf message id). */
+	parentMessageId?: string;
+	/**
+	 * Caller is executing ONE specific skill (e.g. arp's execute_skill tool).
+	 * When true, the session hides the <available_skills> catalog: the
+	 * /skill: command is already expanded by pi itself, and letting the
+	 * model see other skills invites out-of-scope attempts. The target
+	 * skill's own files still load via the /skill: expansion.
+	 */
+	skillExecution?: boolean;
+	/**
+	 * Verbatim system prompt from the outer agent (/execute-agent-skill only).
+	 * When set, it REPLACES pi's system prompt for this turn with nothing
+	 * added - no pi base prompt, no DMP suffix, no skill catalog.
+	 */
+	agentSystemPrompt?: string;
+}
+
 export async function handlePrompt(req: IncomingMessage, res: ServerResponse): Promise<void> {
+	await handlePromptInternal(req, res, await parseJsonBody<PromptRequestBody>(req));
+}
+
+/**
+ * POST /execute-agent-skill — run ONE skill as a subagent of an outer
+ * (arp/LibreChat) agent's execute_skill tool call.
+ *
+ * Differences from /prompt:
+ * - message is built from skillName + input as "/skill:<name> <input>"
+ * - the caller's agentSystemPrompt is used VERBATIM for the turn: pi adds
+ *   nothing (no base prompt, no DMP suffix). Falls back to append-mode with
+ *   the provided fallbackSystemPrompt when no agent prompt is available.
+ * - skillExecution mode: catalog hidden, whole turn hidden from the tree
+ */
+export async function handleExecuteAgentSkill(req: IncomingMessage, res: ServerResponse): Promise<void> {
 	const userId = getUserIdOrReject(req, res);
 	if (!userId) return;
 
 	const body = await parseJsonBody<{
-		message: string;
+		skillName: string;
+		input?: string;
 		agentId: string;
 		sessionId?: string;
-		cwd?: string;
 		stream?: boolean;
-		systemPrompt?: string;
 		userMessageId?: string;
 		responseMessageId?: string;
-		/** Pin the Mongo message-tree mount point for this turn (leaf message id). */
 		parentMessageId?: string;
-		/**
-		 * Caller is executing ONE specific skill (e.g. arp's execute_skill tool).
-		 * When true, the session hides the <available_skills> catalog: the
-		 * /skill: command is already expanded by pi itself, and letting the
-		 * model see other skills invites out-of-scope attempts. The target
-		 * skill's own files still load via the /skill: expansion.
-		 */
-		skillExecution?: boolean;
+		/** The outer agent's exact system prompt, used verbatim. */
+		agentSystemPrompt?: string;
+		/** Fallback when no agentSystemPrompt is available (append mode). */
+		fallbackSystemPrompt?: string;
 	}>(req);
+
+	if (!body || !body.skillName || !body.agentId) {
+		sendError(res, 400, "Missing skillName or agentId in request body");
+		return;
+	}
+
+	const promptBody: PromptRequestBody = {
+		message: `/skill:${body.skillName}${body.input ? ` ${body.input}` : ""}`,
+		agentId: body.agentId,
+		sessionId: body.sessionId,
+		stream: body.stream ?? true,
+		userMessageId: body.userMessageId,
+		responseMessageId: body.responseMessageId,
+		parentMessageId: body.parentMessageId,
+		skillExecution: true,
+		systemPrompt: body.agentSystemPrompt ? undefined : body.fallbackSystemPrompt,
+		agentSystemPrompt: body.agentSystemPrompt,
+	};
+
+	await handlePromptInternal(req, res, promptBody);
+}
+
+async function handlePromptInternal(req: IncomingMessage, res: ServerResponse, body: PromptRequestBody | null): Promise<void> {
+	const userId = getUserIdOrReject(req, res);
+	if (!userId) return;
 
 	if (!body || !body.message) {
 		sendError(res, 400, "Missing message in request body");
@@ -425,7 +486,11 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 
 	try {
 		await session.prompt(taskPrefix + body.message, {
-			appendSystemPrompt: (body.systemPrompt ?? "") + dmpSystemSuffix,
+			// /execute-agent-skill with an agent prompt: use it VERBATIM —
+			// nothing is added by pi (no base prompt, no DMP suffix).
+			overrideSystemPrompt: body.agentSystemPrompt,
+			appendSystemPrompt:
+				body.agentSystemPrompt !== undefined ? undefined : (body.systemPrompt ?? "") + dmpSystemSuffix,
 		});
 
 		// The AI has consumed the responses this turn; close the tasks out.

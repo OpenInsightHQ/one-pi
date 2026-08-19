@@ -215,6 +215,13 @@ export interface PromptOptions {
 	source?: InputSource;
 	/** Append this text to the system prompt for this prompt only */
 	appendSystemPrompt?: string;
+	/**
+	 * Replace the system prompt VERBATIM for this prompt only (restored after).
+	 * Used by /execute-agent-skill: the outer agent's exact system prompt must
+	 * reach the model with nothing added by pi (no base prompt, no suffixes).
+	 * Takes precedence over appendSystemPrompt.
+	 */
+	overrideSystemPrompt?: string;
 }
 
 /** Result from cycleModel() */
@@ -1263,9 +1270,11 @@ export class AgentSession {
 			}
 		}
 
-		// Temporarily append system prompt if requested
+		// Temporarily replace (verbatim) or append to the system prompt
 		const systemPromptToRestore = this.agent.state.systemPrompt;
-		if (options?.appendSystemPrompt) {
+		if (options?.overrideSystemPrompt !== undefined) {
+			this.agent.setSystemPrompt(options.overrideSystemPrompt);
+		} else if (options?.appendSystemPrompt) {
 			this.agent.setSystemPrompt(`${systemPromptToRestore}\n\n${options.appendSystemPrompt}`);
 		}
 
@@ -1273,7 +1282,10 @@ export class AgentSession {
 		await this.waitForRetry();
 
 		// Restore original system prompt if we modified it
-		if (options?.appendSystemPrompt) {
+		if (
+			(options?.overrideSystemPrompt !== undefined || options?.appendSystemPrompt) &&
+			this.agent.state.systemPrompt !== systemPromptToRestore
+		) {
 			this.agent.setSystemPrompt(systemPromptToRestore);
 		}
 	}
