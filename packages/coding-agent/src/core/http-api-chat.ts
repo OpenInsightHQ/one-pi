@@ -398,9 +398,15 @@ async function handlePromptInternal(req: IncomingMessage, res: ServerResponse, b
 	if (body.skillExecution === true) {
 		session.setSkillCatalogHidden(true);
 		session.setTurnHidden(true);
+		// No human is watching a skill run: interactive (human-pending) task
+		// tools are removed from the active set entirely. Execution-tracking
+		// tasks (the task list users watch) are unaffected - they come from
+		// the subagent/skill machinery, not the create_task tool.
+		session.setInteractiveTasksDisabled(true);
 	} else {
 		session.setSkillCatalogHidden(false);
 		session.setTurnHidden(false);
+		session.setInteractiveTasksDisabled(false);
 	}
 
 	// Task response pickup: inject user's task-panel responses (waiting_agent)

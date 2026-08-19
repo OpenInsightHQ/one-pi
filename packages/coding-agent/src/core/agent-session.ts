@@ -2721,6 +2721,38 @@ export class AgentSession {
 
 	private _turnHidden = false;
 
+	/**
+	 * Disable interactive task tools (create_task) for the next prompt(s).
+	 * Skill-execution turns run unattended: nobody will answer a human-pending
+	 * task, so the tool is removed from the active set entirely - the model
+	 * cannot even attempt it. Execution-tracking tasks (type 'subagent', the
+	 * task list the user watches progress on) are unaffected: they are created
+	 * by the subagent/skill machinery, not by the create_task tool.
+	 */
+	setInteractiveTasksDisabled(disabled: boolean): void {
+		if (disabled === this._interactiveTasksDisabled) return;
+		this._interactiveTasksDisabled = disabled;
+
+		const current = this.getActiveToolNames();
+		const interactive = new Set(["create_task", "cancel_task", "list_tasks"]);
+		if (disabled) {
+			const filtered = current.filter((name) => !interactive.has(name));
+			if (filtered.length !== current.length) {
+				this.setActiveToolsByName(filtered);
+			}
+		} else {
+			const restored = [...current];
+			for (const name of interactive) {
+				if (this._toolRegistry.has(name) && !restored.includes(name)) {
+					restored.push(name);
+				}
+			}
+			this.setActiveToolsByName(restored);
+		}
+	}
+
+	private _interactiveTasksDisabled = false;
+
 	private _rebuildSystemPromptWithSkills(toolNames: string[], skills: Skill[]): string {
 		const validToolNames = toolNames.filter((name) => this._toolRegistry.has(name));
 		const toolSnippets: Record<string, string> = {};
