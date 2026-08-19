@@ -127,6 +127,7 @@ function buildMessageDoc(
 	message: AgentMessage,
 	parentMessageId: string,
 	overrideMessageId?: string,
+	forceHidden?: boolean,
 ): MessageDocData {
 	const messageId = overrideMessageId || generateMessageId(message.role);
 	const base: MessageDocData = {
@@ -176,6 +177,15 @@ function buildMessageDoc(
 		base.model = PI_MODEL;
 	}
 
+	// Whole-turn hiding (skillExecution mode): pi runs as a subagent of the
+	// outer agent's execute_skill tool call. Its full transcript must stay out
+	// of the visible tree (the agent's tool result already carries the
+	// summary), while remaining in pi's own context (loadConversationMessages
+	// does not filter hiddenFromTree).
+	if (forceHidden) {
+		base.metadata = { ...(base.metadata ?? {}), hiddenFromTree: true };
+	}
+
 	return base;
 }
 
@@ -188,10 +198,11 @@ export async function saveMessageToMongo(
 	message: AgentMessage,
 	parentMessageId: string,
 	overrideMessageId?: string,
+	forceHidden?: boolean,
 ): Promise<string | null> {
 	if (!isMongoEnabled()) return null;
 
-	const doc = buildMessageDoc(ctx, message, parentMessageId, overrideMessageId);
+	const doc = buildMessageDoc(ctx, message, parentMessageId, overrideMessageId, forceHidden);
 
 	try {
 		const Message = getMessageModel();
@@ -355,6 +366,7 @@ export async function saveConversationToMongo(
 				conversationId: ctx.conversationId,
 				user: ctx.userId,
 				"metadata.isSubagentTrace": { $ne: true },
+				"metadata.hiddenFromTree": { $ne: true },
 			},
 			"_id",
 		)

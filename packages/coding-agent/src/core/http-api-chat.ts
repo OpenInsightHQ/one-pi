@@ -339,10 +339,16 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 	// Skill-execution mode: hide the <available_skills> catalog for this turn
 	// so the model can't see or attempt skills other than the one being
 	// executed (the /skill: command content itself is injected by pi).
+	// Also hide the whole turn's messages from the visible tree: pi runs as a
+	// subagent of the caller's execute_skill tool - its transcript stays in
+	// pi's context but the caller's tool result carries the user-facing
+	// summary, so standalone pi messages would duplicate/fork the tree.
 	if (body.skillExecution === true) {
 		session.setSkillCatalogHidden(true);
+		session.setTurnHidden(true);
 	} else {
 		session.setSkillCatalogHidden(false);
+		session.setTurnHidden(false);
 	}
 
 	// Task response pickup: inject user's task-panel responses (waiting_agent)

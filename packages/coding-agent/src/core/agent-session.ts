@@ -680,6 +680,7 @@ export class AgentSession {
 					message,
 					parentMessageId,
 					this._providedUserMessageId,
+					this._turnHidden,
 				);
 				const userText = this._getUserMessageText(message as Message);
 				const isHiddenInjection = userText.startsWith("/skill:") || userText.startsWith("<task_responses>");
@@ -710,14 +711,15 @@ export class AgentSession {
 						this._mongoTurnAssistantId,
 						assistantMsg,
 					);
-				} else {
-					// New assistant document for this turn
-					const messageId = await saveMessageToMongo(
-						this._conversationPersistence,
-						message,
-						parentMessageId,
-						this._providedResponseMessageId,
-					);
+			} else {
+				// New assistant document for this turn
+				const messageId = await saveMessageToMongo(
+					this._conversationPersistence,
+					message,
+					parentMessageId,
+					this._providedResponseMessageId,
+					this._turnHidden,
+				);
 					if (messageId) {
 						this._mongoTurnAssistantId = messageId;
 						this._lastMongoMessageId = messageId;
@@ -736,8 +738,14 @@ export class AgentSession {
 				return;
 			}
 
-			// Other message types (custom, etc.)
-			const messageId = await saveMessageToMongo(this._conversationPersistence, message, parentMessageId);
+		// Other message types (custom, etc.)
+		const messageId = await saveMessageToMongo(
+			this._conversationPersistence,
+			message,
+			parentMessageId,
+			undefined,
+			this._turnHidden,
+		);
 			if (messageId) {
 				this._lastMongoMessageId = messageId;
 			}
@@ -2699,6 +2707,19 @@ export class AgentSession {
 	}
 
 	private _skillCatalogHidden = false;
+
+	/**
+	 * Hide every message of the current turn from the visible tree. Set for
+	 * skillExecution turns: pi acts as a subagent of the outer agent's
+	 * execute_skill tool call - its transcript stays in pi's own context but
+	 * must not appear as standalone conversation messages (the agent's tool
+	 * result already carries the summary).
+	 */
+	setTurnHidden(hidden: boolean): void {
+		this._turnHidden = hidden;
+	}
+
+	private _turnHidden = false;
 
 	private _rebuildSystemPromptWithSkills(toolNames: string[], skills: Skill[]): string {
 		const validToolNames = toolNames.filter((name) => this._toolRegistry.has(name));
