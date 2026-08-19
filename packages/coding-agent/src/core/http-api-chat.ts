@@ -24,7 +24,12 @@ import {
 	sendJson,
 	sendSSE,
 } from "./http-api-shared.js";
-import { findTasksForAiPickup, markTaskAiNotified, updateTaskStatusInMongo } from "./mongo/task-queue-service.js";
+import {
+	findTasksByConversation,
+	findTasksForAiPickup,
+	markTaskAiNotified,
+	updateTaskStatusInMongo,
+} from "./mongo/task-queue-service.js";
 import { type CreateAgentSessionOptions, createAgentSession } from "./sdk.js";
 import { findMostRecentSession, SessionManager } from "./session-manager.js";
 import { createLibreChatTools } from "./tools/document-generator.js";
@@ -43,6 +48,8 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 		systemPrompt?: string;
 		userMessageId?: string;
 		responseMessageId?: string;
+		/** Pin the Mongo message-tree mount point for this turn (leaf message id). */
+		parentMessageId?: string;
 	}>(req);
 
 	if (!body || !body.message) {
@@ -293,7 +300,7 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 
 	const dmpSystemSuffix = `\n[DMP Context]\nX-User-Id: ${userId}\nX-Agent-Id: ${agentId}\nX-Conversation-Id: ${sessionId}\nWhen calling any dmp- skill script via python, always pass these as CLI arguments: --X-User-Id "${userId}" --X-Agent-Id "${agentId}" --X-Conversation-Id "${sessionId}"`;
 
-	session.setMessageIds(body.userMessageId, body.responseMessageId);
+	session.setMessageIds(body.userMessageId, body.responseMessageId, body.parentMessageId);
 
 	// Task response pickup: inject user's task-panel responses (waiting_agent)
 	// and unnotified cancellations into this prompt, then close the loop.
@@ -323,6 +330,18 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 	}
 	for (const t of pickup.waiting) {
 		updateTaskStatusInMongo(String(t._id), "running").catch(() => {});
+	}
+
+	// Always include the active task snapshot so the model can act on
+	// conversational cancel/stop requests without an extra list_tasks round-trip.
+	const activeTasks = (await findTasksByConversation(sessionId)).filter(
+		(t) => !["completed", "rejected", "dismissed", "failed", "aborted"].includes(String(t.status)),
+	);
+	if (activeTasks.length > 0) {
+		const lines = activeTasks.map(
+			(t) => `- id=${t._id} status=${t.status} type=${t.type ?? "ai_pending"} title="${t.title}"`,
+		);
+		taskPrefix += `<active_tasks>\n${lines.join("\n")}\n</active_tasks>\n(If the user asks to cancel one of these, use the cancel_task tool with its id.)\n\n`;
 	}
 
 	try {

@@ -119,6 +119,7 @@ interface MessageDocData {
 	tokenCount?: number;
 	inputTokenCount?: number;
 	recursionLimit?: string;
+	metadata?: Record<string, unknown>;
 }
 
 function buildMessageDoc(
@@ -146,6 +147,13 @@ function buildMessageDoc(
 		base.sender = "User";
 		base.isCreatedByUser = true;
 		base.text = extractText(userMsg.content);
+		// Machine-injected user messages are not typed by the human and would
+		// render as stray user bubbles / fork the visible tree. Hide them:
+		// - "/skill:" commands injected by arp's execute_skill tool
+		// - "<task_responses>" context blocks injected at prompt pickup
+		if (base.text.startsWith("/skill:") || base.text.startsWith("<task_responses>")) {
+			base.metadata = { ...(base.metadata ?? {}), hiddenFromTree: true };
+		}
 	} else if (message.role === "assistant") {
 		const assistantMsg = message as AssistantMessage;
 		base.sender = PI_MODEL;

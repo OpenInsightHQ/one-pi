@@ -93,6 +93,7 @@ export function createCreateTaskTool(
 	defaultConversationId: string,
 	defaultAgentId: string,
 	turnSeq: () => number,
+	isUnattended: () => boolean = () => false,
 ): AgentTool<typeof createTaskSchema, CreateTaskToolDetails> {
 	return {
 		name: "create_task",
@@ -108,7 +109,15 @@ Two usage patterns:
 2. AI-execution subtasks (type 'subagent'): use when DECOMPOSING work into subtasks.
    Create one task per subtask FIRST so the user sees the plan, then execute them
    via the subagent tool passing each returned _id as taskId — the task status
-   then auto-updates (running → completed/failed).`,
+   then auto-updates (running → completed/failed).
+
+IMPORTANT: Do NOT create human-pending tasks during unattended/skill-driven
+execution (e.g. when running a /skill: command invoked by another agent's
+execute_skill tool call). There is no human watching mid-skill — an
+interactive task would stall forever. In that mode either decide yourself
+using the provided context, or finish with a clear summary of what needs
+a decision. Human-pending tasks are ONLY for interactive conversations
+where the user will see the panel and respond.`,
 		parameters: createTaskSchema,
 		async execute(_toolCallId, params) {
 			if (!taskSync.isEnabled()) {
@@ -124,6 +133,21 @@ Two usage patterns:
 			}
 
 			const type = params.type ?? "ai_pending";
+
+			// Hard gate: unattended execution (skill driven by another agent's
+			// execute_skill call) has no human to answer a pending task - it
+			// would stall forever. Force autonomous decisions in that mode.
+			if (isUnattended() && type !== "subagent") {
+				return {
+					content: [
+						{
+							type: "text",
+							text: "Rejected: this turn runs unattended (skill execution) - no user is available to answer an interactive task. Decide yourself using available context, or proceed and summarize open questions at the end.",
+						},
+					],
+					details: { taskId: null, status: "rejected-unattended" },
+				};
+			}
 			const taskId = await taskSync.createTask({
 				toUserId: params.toUserId ?? defaultUserId,
 				fromAgentId: defaultAgentId,

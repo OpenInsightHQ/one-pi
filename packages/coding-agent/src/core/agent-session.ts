@@ -99,6 +99,7 @@ import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 import { createSubagentTool, SubagentScheduler } from "./subagent/index.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import { TaskSync } from "./task-sync.js";
+import { createCancelTaskTool, createListTasksTool } from "./task-tools.js";
 import type { BashOperations, BashToolOptions } from "./tools/bash.js";
 import { createAllToolDefinitions } from "./tools/index.js";
 import type { PathGuard } from "./tools/path-utils.js";
@@ -339,6 +340,10 @@ export class AgentSession {
 
 	// Task sync with arp-github TaskQueue
 	private _taskSync: TaskSync | undefined = undefined;
+
+	// Raw user input of the current turn (pre skill/template expansion);
+	// used to detect unattended /skill: turns for create_task gating.
+	private _currentTurnMessage = "";
 
 	// Base system prompt (without extension appends) - used to apply fresh appends each turn
 	private _baseSystemPrompt = "";
@@ -620,10 +625,23 @@ export class AgentSession {
 	 * Set caller-provided messageIds for the current turn, so that persisted
 	 * messages use the same IDs as the caller (LibreChat) expects.
 	 * Called before each prompt() invocation.
+	 *
+	 * parentMessageId optionally pins the Mongo tree mount point for this
+	 * turn. When omitted (normal chat), the parent is derived from the last
+	 * persisted message. Callers that embed pi inside an outer agent loop
+	 * (e.g. arp's execute_skill tool) MUST pass the outer conversation's
+	 * current leaf id: at tool-call time the outer agent's own reply is not
+	 * persisted yet, so "last message" points at the user message and the
+	 * pi subtree would fork the message tree.
 	 */
-	public setMessageIds(userMessageId?: string, responseMessageId?: string): void {
+	public setMessageIds(userMessageId?: string, responseMessageId?: string, parentMessageId?: string): void {
 		this._providedUserMessageId = userMessageId;
 		this._providedResponseMessageId = responseMessageId;
+		if (parentMessageId !== undefined) {
+			this._lastMongoMessageId = parentMessageId === NO_PARENT ? NO_PARENT : parentMessageId;
+			this._mongoParentInitialized = true;
+			this._mongoTurnAssistantId = undefined;
+		}
 	}
 
 	/**
@@ -1089,6 +1107,11 @@ export class AgentSession {
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
+
+		// Record the raw user input for this turn (before skill/template
+		// expansion) - used to detect unattended skill-driven turns where
+		// interactive tasks must not be created.
+		this._currentTurnMessage = text;
 
 		// Handle extension commands first (execute immediately, even during streaming)
 		// Extension commands manage their own LLM interaction via pi.sendMessage()
@@ -2616,6 +2639,9 @@ export class AgentSession {
 			parentContext.sessionId,
 			parentContext.agentId,
 			() => this._turnIndex,
+			// Unattended = skill-driven turn (message injected with /skill: prefix
+			// by arp's execute_skill). No user is watching; interactive tasks stall.
+			() => this._currentTurnMessage.trim().startsWith("/skill:"),
 		) as unknown as AgentTool;
 		this._toolRegistry.set("create_task", createTaskTool);
 		this._toolPromptSnippets.set(
@@ -2623,10 +2649,20 @@ export class AgentSession {
 			"Create tasks that wait for human input/approval (confirmation, choice, form, free text)",
 		);
 
+		const cancelTaskTool = createCancelTaskTool(parentContext.sessionId) as unknown as AgentTool;
+		this._toolRegistry.set("cancel_task", cancelTaskTool);
+		this._toolPromptSnippets.set("cancel_task", "Cancel an active task-panel task by id (user asked to stop it)");
+
+		const listTasksTool = createListTasksTool(parentContext.sessionId) as unknown as AgentTool;
+		this._toolRegistry.set("list_tasks", listTasksTool);
+		this._toolPromptSnippets.set("list_tasks", "List this conversation's task-panel tasks (id/title/status)");
+
 		const currentActive = this.getActiveToolNames();
 		const newActive = [...currentActive];
 		if (!newActive.includes("subagent")) newActive.push("subagent");
 		if (!newActive.includes("create_task")) newActive.push("create_task");
+		if (!newActive.includes("cancel_task")) newActive.push("cancel_task");
+		if (!newActive.includes("list_tasks")) newActive.push("list_tasks");
 		if (newActive.length !== currentActive.length) {
 			this.setActiveToolsByName(newActive);
 		}
