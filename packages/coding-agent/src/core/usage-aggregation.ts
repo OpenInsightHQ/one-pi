@@ -16,9 +16,7 @@ export interface AggregatedUsage {
 export function aggregateUsage(current: AggregatedUsage | undefined, usage: PiUsage): AggregatedUsage {
 	const input = usage.input + usage.cacheRead + usage.cacheWrite;
 	const output = usage.output;
-	const previous =
-	current ??
-	{
+	const previous = current ?? {
 		prompt_tokens: 0,
 		completion_tokens: 0,
 		total_tokens: 0,
