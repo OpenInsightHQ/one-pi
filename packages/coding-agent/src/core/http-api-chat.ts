@@ -25,6 +25,7 @@ import {
 	sendSSE,
 } from "./http-api-shared.js";
 import {
+	createTaskInMongo,
 	findTasksByConversation,
 	findTasksForAiPickup,
 	markTaskAiNotified,
@@ -210,7 +211,7 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 					assistantEvent.type === "thinking_delta" ||
 					assistantEvent.type === "thinking_end"
 				) {
-					sendSSE(res, "thinking", {
+					emit("thinking", {
 						type: assistantEvent.type,
 						contentIndex: "contentIndex" in assistantEvent ? assistantEvent.contentIndex : undefined,
 						delta: "delta" in assistantEvent ? assistantEvent.delta : undefined,
@@ -221,7 +222,7 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 					assistantEvent.type === "text_delta" ||
 					assistantEvent.type === "text_end"
 				) {
-					sendSSE(res, "text", {
+					emit("text", {
 						type: assistantEvent.type,
 						contentIndex: "contentIndex" in assistantEvent ? assistantEvent.contentIndex : undefined,
 						delta: "delta" in assistantEvent ? assistantEvent.delta : undefined,
@@ -229,20 +230,20 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 					});
 				}
 			} else if (event.type === "tool_execution_start") {
-				sendSSE(res, "tool_start", {
+				emit("tool_start", {
 					toolCallId: event.toolCallId,
 					toolName: event.toolName,
 					args: event.args,
 				});
 			} else if (event.type === "tool_execution_update") {
-				sendSSE(res, "tool_update", {
+				emit("tool_update", {
 					toolCallId: event.toolCallId,
 					toolName: event.toolName,
 					args: event.args,
 					partialResult: event.partialResult,
 				});
 			} else if (event.type === "tool_execution_end") {
-				sendSSE(res, "tool_end", {
+				emit("tool_end", {
 					toolCallId: event.toolCallId,
 					toolName: event.toolName,
 					result: event.result,
@@ -265,8 +266,8 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 			if (msg.stopReason === "error" && msg.errorMessage) {
 				responseSent = true;
 				if (streamMode) {
-					sendSSE(res, "error", { message: msg.errorMessage });
-					res.end();
+					emit("error", { message: msg.errorMessage });
+					if (!res.writableEnded) res.end();
 				} else {
 					sendError(res, 500, msg.errorMessage);
 				}
@@ -344,6 +345,38 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 		taskPrefix += `<active_tasks>\n${lines.join("\n")}\n</active_tasks>\n(If the user asks to cancel one of these, use the cancel_task tool with its id.)\n\n`;
 	}
 
+	// Skill-execution task tracking. /skill: turns (typically dispatched by
+	// arp's execute_skill tool) commonly run for minutes. Track them in the
+	// task panel so the user sees live status even when the caller stops
+	// reading the stream (pi keeps running: /prompt has no disconnect abort).
+	const isSkillTurn = body.message.trim().startsWith("/skill:");
+	let skillTaskId: string | null = null;
+	if (isSkillTurn) {
+		const skillName = /^\/skill:([^\s]+)/.exec(body.message.trim())?.[1] ?? "skill";
+		const skillTask = await createTaskInMongo({
+			toUserId: userId,
+			fromUserId: userId,
+			fromAgentId: agentId,
+			type: "subagent",
+			title: `[skill] ${skillName}`,
+			status: "running",
+			sourceConversationId: sessionId,
+			subagentName: skillName,
+		});
+		skillTaskId = skillTask ? String(skillTask._id) : null;
+		if (skillTaskId) {
+			console.log(`[HTTP] /prompt: skill execution tracked as task ${skillTaskId}`);
+		}
+	}
+
+	// SSE write guard: after the caller disconnects (e.g. arp abandons a slow
+	// skill stream), writes fail silently but waste cycles - and must never
+	// throw into the event callback. The backend keeps executing regardless.
+	const emit = (event: string, data: unknown): void => {
+		if (res.destroyed || res.writableEnded) return;
+		sendSSE(res, event, data);
+	};
+
 	try {
 		await session.prompt(taskPrefix + body.message, {
 			appendSystemPrompt: (body.systemPrompt ?? "") + dmpSystemSuffix,
@@ -352,6 +385,13 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 		// The AI has consumed the responses this turn; close the tasks out.
 		for (const t of pickup.waiting) {
 			updateTaskStatusInMongo(String(t._id), "completed", "processed in agent turn").catch(() => {});
+		}
+		if (skillTaskId) {
+			updateTaskStatusInMongo(
+				skillTaskId,
+				"completed",
+				finalMessage.slice(0, 300) || "skill finished",
+			).catch(() => {});
 		}
 
 		await new Promise<void>((resolve) => {
@@ -370,13 +410,13 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 		if (!responseSent) {
 			if (streamMode) {
 				if (collectedUsage) {
-					sendSSE(res, "usage", collectedUsage);
+					emit("usage", collectedUsage);
 				}
-				sendSSE(res, "done", {
+				emit("done", {
 					message: finalMessage,
 					generatedFiles,
 				});
-				res.end();
+				if (!res.writableEnded) res.end();
 			} else {
 				sendJson(res, 200, {
 					message: finalMessage,
@@ -388,13 +428,16 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 			}
 		}
 	} catch (error) {
+		const message = error instanceof Error ? error.message : "Unknown error";
+		if (skillTaskId) {
+			updateTaskStatusInMongo(skillTaskId, "failed", message.slice(0, 300)).catch(() => {});
+		}
 		if (responseSent) {
 			return;
 		}
-		const message = error instanceof Error ? error.message : "Unknown error";
 		if (streamMode) {
-			sendSSE(res, "error", { message });
-			res.end();
+			emit("error", { message });
+			if (!res.writableEnded) res.end();
 		} else {
 			sendError(res, 500, `Prompt execution failed: ${message}`);
 		}
