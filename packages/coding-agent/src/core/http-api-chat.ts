@@ -165,9 +165,7 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 
 			console.log(`[HTTP] Creating session with model: ${defaultHttpModel?.provider}/${defaultHttpModel?.id}`);
 
-			const resourceLoader = await createHttpResourceLoader(userId, cwd, agentId, {
-				hideSkillCatalog: body.skillExecution === true,
-			});
+			const resourceLoader = await createHttpResourceLoader(userId, cwd, agentId);
 
 			let authStorage: AuthStorage | undefined;
 			if (httpModelConfig?.apiKey && defaultHttpModel) {
