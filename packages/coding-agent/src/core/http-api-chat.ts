@@ -24,13 +24,7 @@ import {
 	sendJson,
 	sendSSE,
 } from "./http-api-shared.js";
-import {
-	createTaskInMongo,
-	findTasksByConversation,
-	findTasksForAiPickup,
-	markTaskAiNotified,
-	updateTaskStatusInMongo,
-} from "./mongo/task-queue-service.js";
+import { createTaskInMongo, findTasksByConversation, updateTaskStatusInMongo } from "./mongo/task-queue-service.js";
 import { type CreateAgentSessionOptions, createAgentSession } from "./sdk.js";
 import { findMostRecentSession, SessionManager } from "./session-manager.js";
 import { createLibreChatTools } from "./tools/document-generator.js";
@@ -112,7 +106,11 @@ export async function handleExecuteAgentSkill(req: IncomingMessage, res: ServerR
 	await handlePromptInternal(req, res, promptBody);
 }
 
-async function handlePromptInternal(req: IncomingMessage, res: ServerResponse, body: PromptRequestBody | null): Promise<void> {
+async function handlePromptInternal(
+	req: IncomingMessage,
+	res: ServerResponse,
+	body: PromptRequestBody | null,
+): Promise<void> {
 	const userId = getUserIdOrReject(req, res);
 	if (!userId) return;
 
@@ -398,55 +396,22 @@ async function handlePromptInternal(req: IncomingMessage, res: ServerResponse, b
 	if (body.skillExecution === true) {
 		session.setSkillCatalogHidden(true);
 		session.setTurnHidden(true);
-		// No human is watching a skill run: interactive (human-pending) task
-		// tools are removed from the active set entirely. Execution-tracking
-		// tasks (the task list users watch) are unaffected - they come from
-		// the subagent/skill machinery, not the create_task tool.
-		session.setInteractiveTasksDisabled(true);
 	} else {
 		session.setSkillCatalogHidden(false);
 		session.setTurnHidden(false);
-		session.setInteractiveTasksDisabled(false);
 	}
 
-	// Task response pickup: inject user's task-panel responses (waiting_agent)
-	// and unnotified cancellations into this prompt, then close the loop.
-	const pickup = await findTasksForAiPickup(sessionId);
+	// Active task snapshot: lets the model act on conversational cancel/stop
+	// requests without an extra list_tasks round-trip. Interactive
+	// (human-pending) tasks no longer exist - user decisions happen in
+	// conversation - so this list is execution-tracking only.
 	let taskPrefix = "";
-	if (pickup.waiting.length > 0 || pickup.informational.length > 0) {
-		const blocks: string[] = [];
-		for (const t of pickup.waiting) {
-			blocks.push(
-				`<task_response id="${t._id}" title="${t.title}" status="waiting_agent">\nuser response: ${
-					(t.userResponse as string) || JSON.stringify(t.formResponse ?? {})
-				}\n</task_response>`,
-			);
-		}
-		for (const t of pickup.informational) {
-			blocks.push(
-				`<task_response id="${t._id}" title="${t.title}" status="${t.status}">\nuser response: ${
-					(t.userResponse as string) || JSON.stringify(t.formResponse ?? {})
-				}\n</task_response>`,
-			);
-			markTaskAiNotified(String(t._id)).catch(() => {});
-		}
-		taskPrefix = `<task_responses>\n${blocks.join("\n")}\n</task_responses>\n\nThe user answered task-panel tasks above. Account for these responses when handling the message below.\n\n`;
-		console.log(
-			`[HTTP] /prompt: injecting ${pickup.waiting.length} waiting + ${pickup.informational.length} informational task responses`,
-		);
-	}
-	for (const t of pickup.waiting) {
-		updateTaskStatusInMongo(String(t._id), "running").catch(() => {});
-	}
-
-	// Always include the active task snapshot so the model can act on
-	// conversational cancel/stop requests without an extra list_tasks round-trip.
 	const activeTasks = (await findTasksByConversation(sessionId)).filter(
 		(t) => !["completed", "rejected", "dismissed", "failed", "aborted"].includes(String(t.status)),
 	);
 	if (activeTasks.length > 0) {
 		const lines = activeTasks.map(
-			(t) => `- id=${t._id} status=${t.status} type=${t.type ?? "ai_pending"} title="${t.title}"`,
+			(t) => `- id=${t._id} status=${t.status} type=${t.type ?? "subagent"} title="${t.title}"`,
 		);
 		taskPrefix += `<active_tasks>\n${lines.join("\n")}\n</active_tasks>\n(If the user asks to cancel one of these, use the cancel_task tool with its id.)\n\n`;
 	}
@@ -488,16 +453,10 @@ async function handlePromptInternal(req: IncomingMessage, res: ServerResponse, b
 			appendSystemPrompt: (body.systemPrompt ?? "") + dmpSystemSuffix,
 		});
 
-		// The AI has consumed the responses this turn; close the tasks out.
-		for (const t of pickup.waiting) {
-			updateTaskStatusInMongo(String(t._id), "completed", "processed in agent turn").catch(() => {});
-		}
 		if (skillTaskId) {
-			updateTaskStatusInMongo(
-				skillTaskId,
-				"completed",
-				finalMessage.slice(0, 300) || "skill finished",
-			).catch(() => {});
+			updateTaskStatusInMongo(skillTaskId, "completed", finalMessage.slice(0, 300) || "skill finished").catch(
+				() => {},
+			);
 		}
 
 		await new Promise<void>((resolve) => {

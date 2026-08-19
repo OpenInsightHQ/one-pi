@@ -94,9 +94,9 @@ import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.j
 import type { BranchSummaryEntry, CompactionEntry, SessionManager } from "./session-manager.js";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
+import type { Skill } from "./skills.js";
 import type { SlashCommandInfo } from "./slash-commands.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
-import type { Skill } from "./skills.js";
 import { createSubagentTool, SubagentScheduler } from "./subagent/index.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import { TaskSync } from "./task-sync.js";
@@ -341,10 +341,6 @@ export class AgentSession {
 
 	// Task sync with arp-github TaskQueue
 	private _taskSync: TaskSync | undefined = undefined;
-
-	// Raw user input of the current turn (pre skill/template expansion);
-	// used to detect unattended /skill: turns for create_task gating.
-	private _currentTurnMessage = "";
 
 	// Base system prompt (without extension appends) - used to apply fresh appends each turn
 	private _baseSystemPrompt = "";
@@ -711,15 +707,15 @@ export class AgentSession {
 						this._mongoTurnAssistantId,
 						assistantMsg,
 					);
-			} else {
-				// New assistant document for this turn
-				const messageId = await saveMessageToMongo(
-					this._conversationPersistence,
-					message,
-					parentMessageId,
-					this._providedResponseMessageId,
-					this._turnHidden,
-				);
+				} else {
+					// New assistant document for this turn
+					const messageId = await saveMessageToMongo(
+						this._conversationPersistence,
+						message,
+						parentMessageId,
+						this._providedResponseMessageId,
+						this._turnHidden,
+					);
 					if (messageId) {
 						this._mongoTurnAssistantId = messageId;
 						this._lastMongoMessageId = messageId;
@@ -738,14 +734,14 @@ export class AgentSession {
 				return;
 			}
 
-		// Other message types (custom, etc.)
-		const messageId = await saveMessageToMongo(
-			this._conversationPersistence,
-			message,
-			parentMessageId,
-			undefined,
-			this._turnHidden,
-		);
+			// Other message types (custom, etc.)
+			const messageId = await saveMessageToMongo(
+				this._conversationPersistence,
+				message,
+				parentMessageId,
+				undefined,
+				this._turnHidden,
+			);
 			if (messageId) {
 				this._lastMongoMessageId = messageId;
 			}
@@ -1123,11 +1119,6 @@ export class AgentSession {
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
-
-		// Record the raw user input for this turn (before skill/template
-		// expansion) - used to detect unattended skill-driven turns where
-		// interactive tasks must not be created.
-		this._currentTurnMessage = text;
 
 		// Handle extension commands first (execute immediately, even during streaming)
 		// Extension commands manage their own LLM interaction via pi.sendMessage()
@@ -2643,26 +2634,23 @@ export class AgentSession {
 		this._toolPromptGuidelines.set("subagent", [
 			"RULE: ALWAYS delegate codebase search, file finding, and project exploration to the explorer subagent. Never use bash for grep/find/rg/ls commands yourself — the explorer subagent has dedicated search tools and will return concise results without polluting the main context.",
 			"Use the subagent tool for any non-trivial subtask: searching code (explorer), implementing a well-defined change (coder), or reviewing code (reviewer). This saves context tokens and keeps the conversation focused.",
-			"When decomposing work into subtasks, first call create_task (type 'subagent') once per subtask so the user sees the plan in their task panel, then dispatch via the subagent tool passing each task _id as taskId — statuses update automatically as subagents run and finish.",
+			"When decomposing work into subtasks, first call create_subtask once per subtask so the user sees the plan in their task panel, then dispatch via the subagent tool passing each task _id as taskId — statuses update automatically as subagents run and finish.",
 		]);
 
 		if (!this._taskSync) {
 			this._taskSync = new TaskSync();
 		}
-		const createTaskTool = createCreateTaskTool(
+		const createSubtaskTool = createCreateTaskTool(
 			this._taskSync,
 			parentContext.userId,
 			parentContext.sessionId,
 			parentContext.agentId,
 			() => this._turnIndex,
-			// Unattended = skill-driven turn (message injected with /skill: prefix
-			// by arp's execute_skill). No user is watching; interactive tasks stall.
-			() => this._currentTurnMessage.trim().startsWith("/skill:"),
 		) as unknown as AgentTool;
-		this._toolRegistry.set("create_task", createTaskTool);
+		this._toolRegistry.set("create_subtask", createSubtaskTool);
 		this._toolPromptSnippets.set(
-			"create_task",
-			"Create tasks that wait for human input/approval (confirmation, choice, form, free text)",
+			"create_subtask",
+			"Register an execution-tracking subtask for decomposition; user decisions happen in conversation",
 		);
 
 		const cancelTaskTool = createCancelTaskTool(parentContext.sessionId) as unknown as AgentTool;
@@ -2676,7 +2664,7 @@ export class AgentSession {
 		const currentActive = this.getActiveToolNames();
 		const newActive = [...currentActive];
 		if (!newActive.includes("subagent")) newActive.push("subagent");
-		if (!newActive.includes("create_task")) newActive.push("create_task");
+		if (!newActive.includes("create_subtask")) newActive.push("create_subtask");
 		if (!newActive.includes("cancel_task")) newActive.push("cancel_task");
 		if (!newActive.includes("list_tasks")) newActive.push("list_tasks");
 		if (newActive.length !== currentActive.length) {
@@ -2699,10 +2687,7 @@ export class AgentSession {
 			return;
 		}
 		this._skillCatalogHidden = hidden;
-		this._baseSystemPrompt = this._rebuildSystemPromptWithSkills(
-			this.getActiveToolNames(),
-			hidden ? [] : skills,
-		);
+		this._baseSystemPrompt = this._rebuildSystemPromptWithSkills(this.getActiveToolNames(), hidden ? [] : skills);
 		this.agent.setSystemPrompt(this._baseSystemPrompt);
 	}
 
@@ -2720,38 +2705,6 @@ export class AgentSession {
 	}
 
 	private _turnHidden = false;
-
-	/**
-	 * Disable interactive task tools (create_task) for the next prompt(s).
-	 * Skill-execution turns run unattended: nobody will answer a human-pending
-	 * task, so the tool is removed from the active set entirely - the model
-	 * cannot even attempt it. Execution-tracking tasks (type 'subagent', the
-	 * task list the user watches progress on) are unaffected: they are created
-	 * by the subagent/skill machinery, not by the create_task tool.
-	 */
-	setInteractiveTasksDisabled(disabled: boolean): void {
-		if (disabled === this._interactiveTasksDisabled) return;
-		this._interactiveTasksDisabled = disabled;
-
-		const current = this.getActiveToolNames();
-		const interactive = new Set(["create_task", "cancel_task", "list_tasks"]);
-		if (disabled) {
-			const filtered = current.filter((name) => !interactive.has(name));
-			if (filtered.length !== current.length) {
-				this.setActiveToolsByName(filtered);
-			}
-		} else {
-			const restored = [...current];
-			for (const name of interactive) {
-				if (this._toolRegistry.has(name) && !restored.includes(name)) {
-					restored.push(name);
-				}
-			}
-			this.setActiveToolsByName(restored);
-		}
-	}
-
-	private _interactiveTasksDisabled = false;
 
 	private _rebuildSystemPromptWithSkills(toolNames: string[], skills: Skill[]): string {
 		const validToolNames = toolNames.filter((name) => this._toolRegistry.has(name));
