@@ -51,6 +51,14 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 		responseMessageId?: string;
 		/** Pin the Mongo message-tree mount point for this turn (leaf message id). */
 		parentMessageId?: string;
+		/**
+		 * Caller is executing ONE specific skill (e.g. arp's execute_skill tool).
+		 * When true, the session hides the <available_skills> catalog: the
+		 * /skill: command is already expanded by pi itself, and letting the
+		 * model see other skills invites out-of-scope attempts. The target
+		 * skill's own files still load via the /skill: expansion.
+		 */
+		skillExecution?: boolean;
 	}>(req);
 
 	if (!body || !body.message) {
@@ -156,7 +164,9 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 
 			console.log(`[HTTP] Creating session with model: ${defaultHttpModel?.provider}/${defaultHttpModel?.id}`);
 
-			const resourceLoader = await createHttpResourceLoader(userId, cwd, agentId);
+			const resourceLoader = await createHttpResourceLoader(userId, cwd, agentId, {
+				hideSkillCatalog: body.skillExecution === true,
+			});
 
 			let authStorage: AuthStorage | undefined;
 			if (httpModelConfig?.apiKey && defaultHttpModel) {
@@ -323,6 +333,15 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 	const dmpSystemSuffix = `\n[DMP Context]\nX-User-Id: ${userId}\nX-Agent-Id: ${agentId}\nX-Conversation-Id: ${sessionId}\nWhen calling any dmp- skill script via python, always pass these as CLI arguments: --X-User-Id "${userId}" --X-Agent-Id "${agentId}" --X-Conversation-Id "${sessionId}"`;
 
 	session.setMessageIds(body.userMessageId, body.responseMessageId, body.parentMessageId);
+
+	// Skill-execution mode: hide the <available_skills> catalog for this turn
+	// so the model can't see or attempt skills other than the one being
+	// executed (the /skill: command content itself is injected by pi).
+	if (body.skillExecution === true) {
+		session.setSkillCatalogHidden(true);
+	} else {
+		session.setSkillCatalogHidden(false);
+	}
 
 	// Task response pickup: inject user's task-panel responses (waiting_agent)
 	// and unnotified cancellations into this prompt, then close the loop.

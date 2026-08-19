@@ -217,6 +217,7 @@ export async function createHttpResourceLoader(
 	userId: string,
 	cwd: string,
 	agentId?: string | null,
+	options?: { hideSkillCatalog?: boolean },
 ): Promise<ResourceLoader> {
 	const agentDir = getAgentDir();
 	const additionalSkillPaths: string[] = [];
@@ -255,7 +256,17 @@ export async function createHttpResourceLoader(
 		}
 	}
 
-	const loader = new DefaultResourceLoader({ cwd, agentDir, additionalSkillPaths });
+	const loader = new DefaultResourceLoader({
+		cwd,
+		agentDir,
+		additionalSkillPaths,
+		// Skill-execution mode: the caller executes ONE specific skill (arp's
+		// execute_skill). Empty the <available_skills> catalog so the model
+		// can't see (or attempt) other skills; the /skill: command is still
+		// expanded by pi itself via _expandSkillCommand, independent of the
+		// catalog.
+		skillsOverride: options?.hideSkillCatalog ? () => ({ skills: [], diagnostics: [] }) : undefined,
+	});
 	await loader.reload();
 	return loader;
 }

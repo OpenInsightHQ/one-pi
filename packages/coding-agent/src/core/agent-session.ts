@@ -96,6 +96,7 @@ import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader }
 import type { SettingsManager } from "./settings-manager.js";
 import type { SlashCommandInfo } from "./slash-commands.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
+import type { Skill } from "./skills.js";
 import { createSubagentTool, SubagentScheduler } from "./subagent/index.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import { TaskSync } from "./task-sync.js";
@@ -2675,6 +2676,62 @@ export class AgentSession {
 		}
 
 		this._rebuildSystemPrompt(newActive);
+	}
+
+	/**
+	 * Temporarily hide or restore the <available_skills> catalog for the next
+	 * prompt(s). Used when an outer agent executes ONE specific skill via
+	 * execute_skill: the catalog would invite the model to attempt other
+	 * skills it was not authorized to run. Call with false to restore.
+	 */
+	setSkillCatalogHidden(hidden: boolean): void {
+		const skills = this._resourceLoader.getSkills().skills;
+		if (hidden === this._skillCatalogHidden || skills.length === 0) {
+			this._skillCatalogHidden = hidden;
+			return;
+		}
+		this._skillCatalogHidden = hidden;
+		this._baseSystemPrompt = this._rebuildSystemPromptWithSkills(
+			this.getActiveToolNames(),
+			hidden ? [] : skills,
+		);
+		this.agent.setSystemPrompt(this._baseSystemPrompt);
+	}
+
+	private _skillCatalogHidden = false;
+
+	private _rebuildSystemPromptWithSkills(toolNames: string[], skills: Skill[]): string {
+		const validToolNames = toolNames.filter((name) => this._toolRegistry.has(name));
+		const toolSnippets: Record<string, string> = {};
+		const promptGuidelines: string[] = [];
+		for (const name of validToolNames) {
+			const snippet = this._toolPromptSnippets.get(name);
+			if (snippet) {
+				toolSnippets[name] = snippet;
+			}
+
+			const toolGuidelines = this._toolPromptGuidelines.get(name);
+			if (toolGuidelines) {
+				promptGuidelines.push(...toolGuidelines);
+			}
+		}
+
+		const loaderSystemPrompt = this._resourceLoader.getSystemPrompt();
+		const loaderAppendSystemPrompt = this._resourceLoader.getAppendSystemPrompt();
+		const appendSystemPrompt =
+			loaderAppendSystemPrompt.length > 0 ? loaderAppendSystemPrompt.join("\n\n") : undefined;
+		const loadedContextFiles = this._resourceLoader.getAgentsFiles().agentsFiles;
+
+		return buildSystemPrompt({
+			cwd: this._cwd,
+			skills,
+			contextFiles: loadedContextFiles,
+			customPrompt: loaderSystemPrompt,
+			appendSystemPrompt,
+			selectedTools: validToolNames,
+			toolSnippets,
+			promptGuidelines,
+		});
 	}
 
 	async reload(): Promise<void> {
