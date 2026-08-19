@@ -29,6 +29,7 @@ import { type CreateAgentSessionOptions, createAgentSession } from "./sdk.js";
 import { findMostRecentSession, SessionManager } from "./session-manager.js";
 import { createLibreChatTools } from "./tools/document-generator.js";
 import { getCachedMCPTools } from "./tools/mcp-registry.js";
+import { type AggregatedUsage, aggregateUsage } from "./usage-aggregation.js";
 
 export async function handlePrompt(req: IncomingMessage, res: ServerResponse): Promise<void> {
 	const userId = getUserIdOrReject(req, res);
@@ -163,7 +164,7 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 
 	let finalMessage: string = "";
 	let responseSent = false;
-	let collectedUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
+	let collectedUsage: AggregatedUsage | undefined;
 	const generatedFiles: {
 		name: string;
 		path: string;
@@ -249,11 +250,12 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 			const textContent = msg.content.find((c) => c.type === "text");
 			finalMessage = textContent?.text ?? "";
 			if (msg.usage) {
-				collectedUsage = {
-					prompt_tokens: (msg.usage as any).input || 0,
-					completion_tokens: (msg.usage as any).output || 0,
-					total_tokens: (msg.usage as any).totalTokens || 0,
-				};
+				collectedUsage = aggregateUsage(collectedUsage, {
+					input: msg.usage.input || 0,
+					output: msg.usage.output || 0,
+					cacheRead: msg.usage.cacheRead || 0,
+					cacheWrite: msg.usage.cacheWrite || 0,
+				});
 			}
 			if (msg.stopReason === "error" && msg.errorMessage) {
 				responseSent = true;
