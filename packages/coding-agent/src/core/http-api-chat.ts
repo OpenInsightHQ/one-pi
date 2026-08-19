@@ -56,12 +56,6 @@ interface PromptRequestBody {
 	 * skill's own files still load via the /skill: expansion.
 	 */
 	skillExecution?: boolean;
-	/**
-	 * Verbatim system prompt from the outer agent (/execute-agent-skill only).
-	 * When set, it REPLACES pi's system prompt for this turn with nothing
-	 * added - no pi base prompt, no DMP suffix, no skill catalog.
-	 */
-	agentSystemPrompt?: string;
 }
 
 export async function handlePrompt(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -74,9 +68,9 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
  *
  * Differences from /prompt:
  * - message is built from skillName + input as "/skill:<name> <input>"
- * - the caller's agentSystemPrompt is used VERBATIM for the turn: pi adds
- *   nothing (no base prompt, no DMP suffix). Falls back to append-mode with
- *   the provided fallbackSystemPrompt when no agent prompt is available.
+ * - the outer agent's system prompt is passed via systemPrompt (append
+ *   mode): pi's base prompt (tool catalog, guidelines) and the DMP context
+ *   suffix remain in effect, with the agent prompt appended on top
  * - skillExecution mode: catalog hidden, whole turn hidden from the tree
  */
 export async function handleExecuteAgentSkill(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -92,9 +86,9 @@ export async function handleExecuteAgentSkill(req: IncomingMessage, res: ServerR
 		userMessageId?: string;
 		responseMessageId?: string;
 		parentMessageId?: string;
-		/** The outer agent's exact system prompt, used verbatim. */
+		/** The outer agent's system prompt, appended to pi's base prompt. */
 		agentSystemPrompt?: string;
-		/** Fallback when no agentSystemPrompt is available (append mode). */
+		/** Fallback when no agentSystemPrompt is available. */
 		fallbackSystemPrompt?: string;
 	}>(req);
 
@@ -112,8 +106,7 @@ export async function handleExecuteAgentSkill(req: IncomingMessage, res: ServerR
 		responseMessageId: body.responseMessageId,
 		parentMessageId: body.parentMessageId,
 		skillExecution: true,
-		systemPrompt: body.agentSystemPrompt ? undefined : body.fallbackSystemPrompt,
-		agentSystemPrompt: body.agentSystemPrompt,
+		systemPrompt: body.agentSystemPrompt || body.fallbackSystemPrompt,
 	};
 
 	await handlePromptInternal(req, res, promptBody);
@@ -486,11 +479,7 @@ async function handlePromptInternal(req: IncomingMessage, res: ServerResponse, b
 
 	try {
 		await session.prompt(taskPrefix + body.message, {
-			// /execute-agent-skill with an agent prompt: use it VERBATIM —
-			// nothing is added by pi (no base prompt, no DMP suffix).
-			overrideSystemPrompt: body.agentSystemPrompt,
-			appendSystemPrompt:
-				body.agentSystemPrompt !== undefined ? undefined : (body.systemPrompt ?? "") + dmpSystemSuffix,
+			appendSystemPrompt: (body.systemPrompt ?? "") + dmpSystemSuffix,
 		});
 
 		// The AI has consumed the responses this turn; close the tasks out.
