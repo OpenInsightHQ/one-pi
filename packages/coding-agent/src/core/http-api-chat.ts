@@ -104,15 +104,36 @@ export async function handlePrompt(req: IncomingMessage, res: ServerResponse): P
 		`[HTTP] /prompt called, agentId=${agentId}, sessionId=${sessionId}, existingSession=${!!session}, defaultHttpModel=${defaultHttpModel?.provider}/${defaultHttpModel?.id}`,
 	);
 
-	// If session is still streaming from a previous request, abort it first
+	// If session is still streaming from a previous request, abort it first.
+	// Capped wait: a previous turn stuck in a long-running tool can take
+	// minutes to wind down; hanging here makes the new request appear dead
+	// (no output, no thinking). After the cap, fail fast so the caller shows
+	// an error and the user can retry once the old turn drains.
 	if (session?.isStreaming) {
 		console.log(`[HTTP] /prompt: session ${sessionId} is still streaming, aborting...`);
-		try {
-			await session.abort();
-			console.log(`[HTTP] /prompt: session ${sessionId} aborted successfully`);
-		} catch (err: unknown) {
-			console.error(`[HTTP] /prompt: error aborting session ${sessionId}:`, err);
+		const ABORT_WAIT_MS = 15_000;
+		const aborted = await Promise.race([
+			session
+				.abort()
+				.then(() => true)
+				.catch((err: unknown) => {
+					console.error(`[HTTP] /prompt: error aborting session ${sessionId}:`, err);
+					return true;
+				}),
+			new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ABORT_WAIT_MS)),
+		]);
+		if (!aborted) {
+			console.error(
+				`[HTTP] /prompt: previous turn on ${sessionId} still draining after ${ABORT_WAIT_MS}ms, rejecting`,
+			);
+			sendError(
+				res,
+				409,
+				"Previous request is still finishing on the server (a long-running tool has not stopped yet). Please retry in a moment.",
+			);
+			return;
 		}
+		console.log(`[HTTP] /prompt: session ${sessionId} aborted successfully`);
 	}
 
 	if (!session) {

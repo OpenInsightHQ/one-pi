@@ -652,17 +652,42 @@ export async function loadConversationMessages(ctx: ConversationPersistenceConte
 /**
  * Get the messageId of the most recently created message in this conversation.
  * Used to set parentMessageId for the next message.
+ *
+ * A wrong NO_PARENT here forks the message tree from the root, so when the
+ * primary query yields NO_PARENT but the conversation has messages (transient
+ * error / replication lag), re-query once before giving up.
  */
 export async function getLastMessageId(ctx: ConversationPersistenceContext): Promise<string> {
 	if (!isMongoEnabled()) return NO_PARENT;
 
-	try {
+	const queryLast = async (): Promise<string | null> => {
 		const Message = getMessageModel();
 		const lastMsg = await Message.findOne({ conversationId: ctx.conversationId, user: ctx.userId }, "messageId")
 			.sort({ createdAt: -1 })
 			.lean();
+		return ((lastMsg as Record<string, unknown> | null)?.messageId as string | undefined) ?? null;
+	};
 
-		return ((lastMsg as Record<string, unknown> | null)?.messageId as string | undefined) ?? NO_PARENT;
+	try {
+		const first = await queryLast();
+		if (first) return first;
+
+		// NO_PARENT candidate: verify the conversation is actually empty.
+		try {
+			const Message = getMessageModel();
+			const count = await Message.countDocuments({ conversationId: ctx.conversationId, user: ctx.userId });
+			if (count > 0) {
+				console.error(
+					`[MongoDB] getLastMessageId: primary query returned null but conversation has ${count} messages - re-querying`,
+				);
+				const retry = await queryLast();
+				if (retry) return retry;
+				console.error("[MongoDB] getLastMessageId: retry also returned null - mounting at NO_PARENT");
+			}
+		} catch (verifyErr) {
+			console.error("[MongoDB] getLastMessageId verification failed:", verifyErr);
+		}
+		return NO_PARENT;
 	} catch (err) {
 		console.error("[MongoDB] Error getting last message ID:", err);
 		return NO_PARENT;

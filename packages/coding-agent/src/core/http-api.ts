@@ -366,9 +366,14 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 				found = true;
 				if (session.isStreaming) {
 					wasStreaming = true;
+					// Fire the abort signal immediately but do NOT await full
+					// idle: a turn stuck in a long tool can take minutes to wind
+					// down, and callers (stop button path) need a fast ack.
+					// The signal itself stops LLM streaming right away.
 					try {
-						await session.abort();
-						console.log(`[HTTP] /abort: session ${body.sessionId} aborted successfully`);
+						session.abortRetry();
+						session.agent.abort();
+						console.log(`[HTTP] /abort: abort signal sent for session ${body.sessionId}`);
 					} catch (err: unknown) {
 						console.error(`[HTTP] /abort: error aborting session ${body.sessionId}:`, err);
 					}
