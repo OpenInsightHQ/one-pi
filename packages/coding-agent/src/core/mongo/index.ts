@@ -59,6 +59,7 @@ export {
 	type AclEntryModel,
 	type AgentModel,
 	type ConversationModel,
+	ensureMessageIndexes,
 	getAccessRoleModel,
 	getAclEntryModel,
 	getAgentModel,

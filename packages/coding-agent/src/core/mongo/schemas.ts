@@ -157,6 +157,14 @@ export const messageSchema = new Schema<MessageDoc>(
 	{ strict: false, timestamps: true, collection: "messages" },
 );
 
+// Enforce one document per (messageId, user). Concurrent upserts racing the
+// findOneAndUpdate in saveMessageToMongo previously inserted duplicate docs
+// with the same messageId (e.g. abort finalizing two assistant messages at
+// once), forking the LibreChat message tree. Same index as arp's message
+// schema declaration — declared here so pi builds it on shared databases
+// where arp's autoIndex never created it.
+messageSchema.index({ messageId: 1, user: 1 }, { unique: true });
+
 // ---------------------------------------------------------------------------
 // conversations (shared with arp/LibreChat)
 // ---------------------------------------------------------------------------

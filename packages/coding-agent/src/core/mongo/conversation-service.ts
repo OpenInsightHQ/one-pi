@@ -189,6 +189,12 @@ function buildMessageDoc(
 	return base;
 }
 
+function isDuplicateKeyError(err: unknown): boolean {
+	const e = err as { code?: number; message?: string } | null;
+	if (!err) return false;
+	return e?.code === 11000 || (typeof e?.message === "string" && e.message.includes("E11000"));
+}
+
 /**
  * Save a single agent message to the MongoDB messages collection.
  * Returns the generated messageId, or null if not saved.
@@ -206,11 +212,24 @@ export async function saveMessageToMongo(
 
 	try {
 		const Message = getMessageModel();
-		await Message.findOneAndUpdate(
-			{ messageId: doc.messageId, user: ctx.userId },
-			{ $set: doc },
-			{ upsert: true, new: true },
-		);
+		// Upsert by (messageId, user). Under the unique index, a concurrent
+		// writer winning the insert makes this upsert fail with E11000 —
+		// retry once: the winner's document now exists, so the retry takes
+		// the update path and both writers converge on a single document.
+		try {
+			await Message.findOneAndUpdate(
+				{ messageId: doc.messageId, user: ctx.userId },
+				{ $set: doc },
+				{ upsert: true, new: true },
+			);
+		} catch (err) {
+			if (!isDuplicateKeyError(err)) throw err;
+			await Message.findOneAndUpdate(
+				{ messageId: doc.messageId, user: ctx.userId },
+				{ $set: doc },
+				{ upsert: true, new: true },
+			);
+		}
 		return doc.messageId;
 	} catch (err) {
 		console.error("[MongoDB] Error saving message:", err);
@@ -262,6 +281,10 @@ export async function mergeAssistantMessageInMongo(
 			content: mergedContent,
 			text: mergedText,
 			finish_reason: mapStopReason(message.stopReason),
+			// Same-turn merges (error retries, abort finalizers) must refresh
+			// the error flag — otherwise a failed first attempt leaves the
+			// merged document permanently marked as error.
+			error: message.stopReason === "error",
 		};
 
 		if (message.usage) {

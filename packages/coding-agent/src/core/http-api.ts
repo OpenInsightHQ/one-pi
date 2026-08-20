@@ -60,7 +60,7 @@ import {
 	handleSkillsRegisterMcp,
 	handleSkillsUpload,
 } from "./http-api-skill.js";
-import { connectMongo } from "./mongo/index.js";
+import { connectMongo, ensureMessageIndexes } from "./mongo/index.js";
 import { addAllowedReadPrefix } from "./tools/path-utils.js";
 
 export { handleChatCompletions, handleExecuteAgentSkill, handlePrompt } from "./http-api-chat.js";
@@ -583,7 +583,12 @@ export async function startHttpServer(
 
 	// Connect to MongoDB (for authorized skills + ACL permission checks).
 	// Non-fatal: server starts regardless; authorized skills are simply unavailable on failure.
-	await connectMongo();
+	const mongoConnected = await connectMongo();
+	if (mongoConnected) {
+		// Build declared message indexes (unique { messageId, user }). Logs a
+		// clear error when pre-existing duplicates block the build; non-fatal.
+		await ensureMessageIndexes();
+	}
 
 	if (options.uploadLimits) {
 		setUploadLimits(options.uploadLimits);

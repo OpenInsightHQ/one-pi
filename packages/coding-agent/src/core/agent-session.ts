@@ -321,6 +321,14 @@ export class AgentSession {
 	private _mongoTurnAssistantId: string | undefined = undefined;
 	private _providedUserMessageId: string | undefined = undefined;
 	private _providedResponseMessageId: string | undefined = undefined;
+	/**
+	 * Serializes MongoDB persistence per session. Concurrent message_end
+	 * handlers (e.g. abort finalizing two assistant messages at once) racing
+	 * the upsert produced duplicate documents with the same messageId and
+	 * forked the message tree. Every _persistMessageToMongo call is chained
+	 * onto this promise.
+	 */
+	private _mongoPersistChain: Promise<void> = Promise.resolve();
 	private _extensionUIContext?: ExtensionUIContext;
 	private _extensionCommandContextActions?: ExtensionCommandContextActions;
 	private _extensionShutdownHandler?: ShutdownHandler;
@@ -573,9 +581,16 @@ export class AgentSession {
 				// Regular LLM message - persist as SessionMessageEntry
 				this.sessionManager.appendMessage(event.message);
 
-				// Persist to MongoDB (conversation history)
+				// Persist to MongoDB (conversation history). Chained through
+				// _mongoPersistChain so concurrent message_end events (abort
+				// can finalize two assistant messages back to back) cannot
+				// race the upserts and create duplicate documents.
 				if (this._conversationPersistence && isMongoEnabled()) {
-					await this._persistMessageToMongo(event.message);
+					const messageToPersist = event.message;
+					this._mongoPersistChain = this._mongoPersistChain.then(() =>
+						this._persistMessageToMongo(messageToPersist),
+					);
+					await this._mongoPersistChain;
 				}
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
@@ -671,11 +686,16 @@ export class AgentSession {
 			// User message: new turn starts, clear turn merge state
 			if (message.role === "user") {
 				this._mongoTurnAssistantId = undefined;
+				// Caller-provided ids are single-use: a second message_end in
+				// the same turn must never re-insert with the same id (that
+				// produced duplicate documents and forked the tree on abort).
+				const providedUserMessageId = this._providedUserMessageId;
+				this._providedUserMessageId = undefined;
 				const messageId = await saveMessageToMongo(
 					this._conversationPersistence,
 					message,
 					parentMessageId,
-					this._providedUserMessageId,
+					providedUserMessageId,
 					this._turnHidden,
 				);
 				const userText = this._getUserMessageText(message as Message);
@@ -709,22 +729,20 @@ export class AgentSession {
 					);
 				} else {
 					// New assistant document for this turn
+					// Caller-provided id is single-use (see user branch above)
+					const providedResponseMessageId = this._providedResponseMessageId;
+					this._providedResponseMessageId = undefined;
 					const messageId = await saveMessageToMongo(
 						this._conversationPersistence,
 						message,
 						parentMessageId,
-						this._providedResponseMessageId,
+						providedResponseMessageId,
 						this._turnHidden,
 					);
 					if (messageId) {
 						this._mongoTurnAssistantId = messageId;
 						this._lastMongoMessageId = messageId;
 					}
-				}
-
-				// Turn ends when stopReason is not toolUse
-				if (assistantMsg.stopReason !== "toolUse") {
-					this._mongoTurnAssistantId = undefined;
 				}
 
 				const convoOptions: { finishReason?: string } = {

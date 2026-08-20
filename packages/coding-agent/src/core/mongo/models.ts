@@ -84,3 +84,24 @@ export type TaskQueueModel = mongoose.Model<TaskQueueDoc>;
 export function getTaskQueueModel(): TaskQueueModel {
 	return mongoose.model<TaskQueueDoc>("TaskQueue", taskQueueSchema, "taskqueues");
 }
+
+/**
+ * Build the declared indexes on the messages collection at startup.
+ *
+ * Returns false (with a clear error log) instead of throwing so the server
+ * still starts — e.g. when pre-existing duplicate documents block the unique
+ * { messageId, user } index. Remove the duplicates (keep one document per
+ * messageId) and restart to let the index build.
+ */
+export async function ensureMessageIndexes(): Promise<boolean> {
+	try {
+		await getMessageModel().createIndexes();
+		return true;
+	} catch (err) {
+		console.error(
+			"[MongoDB] Failed to build messages indexes (duplicate messageId documents must be removed before the unique index can be created):",
+			err,
+		);
+		return false;
+	}
+}
