@@ -4,10 +4,13 @@ import type {
 	AclEntryDoc,
 	AgentDoc,
 	ConversationDoc,
+	MemoryEntryDoc,
 	MessageDoc,
 	RoleDoc,
 	SkillDoc,
+	SystemPromptDoc,
 	TaskQueueDoc,
+	UserDoc,
 	UserRoleDoc,
 } from "./types.js";
 
@@ -104,11 +107,86 @@ export const roleSchema = new Schema<RoleDoc>(
 	{
 		name: { type: String },
 		description: { type: String },
+		permissions: { type: Schema.Types.Mixed },
 		_class: { type: String },
 	},
 	{ strict: false, timestamps: true, collection: "roles" },
 );
 roleSchema.index({ name: 1 });
+
+// ---------------------------------------------------------------------------
+// users (shared with arp/LibreChat; read-only for pi: role + memory opt-out)
+// ---------------------------------------------------------------------------
+
+export const userSchema = new Schema<UserDoc>(
+	{
+		role: { type: String },
+		roles: { type: [String], default: undefined },
+		personalization: {
+			type: { memories: { type: Boolean } },
+			default: undefined,
+		},
+		username: { type: String },
+	},
+	// Collection is owned by arp/LibreChat; strict:false so arp-written fields
+	// are preserved on read. Indexes are owned by the arp model definition.
+	{ strict: false, timestamps: true, collection: "users" },
+);
+
+// ---------------------------------------------------------------------------
+// systemprompts (shared with arp/LibreChat; read-only for pi)
+// ---------------------------------------------------------------------------
+
+export const systemPromptSchema = new Schema<SystemPromptDoc>(
+	{
+		key: { type: String, required: true },
+		description: { type: String },
+		category: { type: String },
+		content: { type: String },
+		defaultContent: { type: String },
+		changeNote: { type: String },
+		isSystem: { type: Boolean },
+		piPrompt: { type: Boolean },
+		piSavePath: { type: String },
+		updatedBy: { type: String },
+		versionHistory: { type: [Schema.Types.Mixed], default: undefined },
+		_class: { type: String },
+	},
+	// Read-only for pi (arp/dmp own the documents); strict:false preserves
+	// Java-backend fields. timestamps:false: the collection uses its own fields.
+	{ strict: false, timestamps: false, collection: "systemprompts" },
+);
+
+// ---------------------------------------------------------------------------
+// memoryentries (shared with arp/LibreChat; read-only for pi)
+// ---------------------------------------------------------------------------
+
+export const memoryEntrySchema = new Schema<MemoryEntryDoc>(
+	{
+		userId: { type: Schema.Types.ObjectId, required: true },
+		key: { type: String, required: true },
+		value: { type: String, required: true },
+		tokenCount: { type: Number, default: 0 },
+		type: { type: String, default: "knowledge" },
+		source: {
+			type: {
+				from: { type: String, default: "auto" },
+				conversationId: { type: String, default: null },
+				messageIds: { type: [String], default: undefined },
+			},
+			default: undefined,
+		},
+		weight: {
+			type: { importance: { type: Number, default: 0.5 } },
+			default: undefined,
+		},
+		last_accessed_at: { type: Date, default: null },
+		updated_at: { type: Date },
+	},
+	// Read-only for pi (arp owns the documents); timestamps:false — the
+	// collection uses `updated_at` instead of mongoose timestamps.
+	{ strict: false, timestamps: false, collection: "memoryentries" },
+);
 
 // ---------------------------------------------------------------------------
 // agents (shared with arp/LibreChat)

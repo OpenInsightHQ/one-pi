@@ -31,7 +31,8 @@ export type PrincipalModel = (typeof PrincipalModel)[keyof typeof PrincipalModel
 
 export const ResourceType = {
 	SKILL: "skill",
-	// Future: MESSAGE, CONVERSATION, SYSTEMPROMPT, AGENT, ...
+	SYSTEM_PROMPT: "systemPrompt",
+	// Future: MESSAGE, CONVERSATION, AGENT, ...
 } as const;
 export type ResourceType = (typeof ResourceType)[keyof typeof ResourceType];
 
@@ -122,9 +123,90 @@ export interface RoleDoc {
 	_id: import("mongoose").Types.ObjectId;
 	name?: string;
 	description?: string;
+	/**
+	 * LibreChat role permissions, keyed by permission type then permission
+	 * (e.g. `MEMORIES: { USE: true, READ: true }`). Values are boolean flags
+	 * merged with OR semantics across all of a user's roles.
+	 */
+	permissions?: Record<string, Record<string, boolean>>;
 	createdAt?: Date;
 	updatedAt?: Date;
 	_class?: string;
+}
+
+// ---------------------------------------------------------------------------
+// User document (shared with arp/LibreChat `users` collection)
+// ---------------------------------------------------------------------------
+
+export interface UserDoc {
+	_id: import("mongoose").Types.ObjectId;
+	/** Primary role name (e.g. `ADMIN`, `USER`) */
+	role?: string;
+	/** Multi-role names, populated from the `userroles` collection at auth time */
+	roles?: string[];
+	personalization?: {
+		/** false = user opted out of long-term memory injection */
+		memories?: boolean;
+	};
+	username?: string;
+	createdAt?: Date;
+	updatedAt?: Date;
+	__v?: number;
+	_class?: string;
+}
+
+// ---------------------------------------------------------------------------
+// SystemPrompt document (shared with arp/LibreChat `systemprompts` collection)
+// ---------------------------------------------------------------------------
+
+export interface SystemPromptDoc {
+	_id: import("mongoose").Types.ObjectId;
+	/** Globally unique prompt key, e.g. `pi.system`, `visualization.echarts` */
+	key: string;
+	description?: string;
+	category?: string;
+	/** Current prompt content (with `{{lang}}` placeholders, resolved by arp) */
+	content?: string;
+	/** Seed content for admin-side reset */
+	defaultContent?: string;
+	changeNote?: string;
+	isSystem?: boolean;
+	/** true = listed in pi's <available_prompts> section */
+	piPrompt?: boolean;
+	/** Absolute path of the prompt file on the pi server (readable via the read tool) */
+	piSavePath?: string;
+	updatedBy?: string;
+	versionHistory?: Array<Record<string, unknown>>;
+	createdAt?: Date;
+	updatedAt?: Date;
+	_class?: string;
+}
+
+// ---------------------------------------------------------------------------
+// MemoryEntry document (shared with arp/LibreChat `memoryentries` collection)
+// ---------------------------------------------------------------------------
+
+export type MemoryType = "profile" | "preference" | "constraint" | "knowledge";
+
+export interface MemorySourceDoc {
+	from?: "auto" | "manual";
+	conversationId?: string | null;
+	messageIds?: string[];
+}
+
+export interface MemoryEntryDoc {
+	_id: import("mongoose").Types.ObjectId;
+	userId: import("mongoose").Types.ObjectId;
+	key: string;
+	value: string;
+	tokenCount?: number;
+	type?: MemoryType;
+	source?: MemorySourceDoc;
+	weight?: { importance?: number };
+	last_accessed_at?: Date | null;
+	updated_at?: Date;
+	createdAt?: Date;
+	__v?: number;
 }
 
 // ---------------------------------------------------------------------------

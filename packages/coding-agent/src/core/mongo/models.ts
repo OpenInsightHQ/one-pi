@@ -4,21 +4,27 @@ import {
 	aclEntrySchema,
 	agentSchema,
 	conversationSchema,
+	memoryEntrySchema,
 	messageSchema,
 	roleSchema,
 	skillSchema,
+	systemPromptSchema,
 	taskQueueSchema,
 	userRoleSchema,
+	userSchema,
 } from "./schemas.js";
 import type {
 	AccessRoleDoc,
 	AclEntryDoc,
 	AgentDoc,
 	ConversationDoc,
+	MemoryEntryDoc,
 	MessageDoc,
 	RoleDoc,
 	SkillDoc,
+	SystemPromptDoc,
 	TaskQueueDoc,
+	UserDoc,
 	UserRoleDoc,
 } from "./types.js";
 
@@ -83,6 +89,24 @@ export type TaskQueueModel = mongoose.Model<TaskQueueDoc>;
 
 export function getTaskQueueModel(): TaskQueueModel {
 	return mongoose.model<TaskQueueDoc>("TaskQueue", taskQueueSchema, "taskqueues");
+}
+
+export type UserModel = mongoose.Model<UserDoc>;
+
+export function getUserModel(): UserModel {
+	return mongoose.model<UserDoc>("PiUser", userSchema, "users");
+}
+
+export type SystemPromptModel = mongoose.Model<SystemPromptDoc>;
+
+export function getSystemPromptModel(): SystemPromptModel {
+	return mongoose.model<SystemPromptDoc>("SystemPrompt", systemPromptSchema, "systemprompts");
+}
+
+export type MemoryEntryModel = mongoose.Model<MemoryEntryDoc>;
+
+export function getMemoryEntryModel(): MemoryEntryModel {
+	return mongoose.model<MemoryEntryDoc>("MemoryEntry", memoryEntrySchema, "memoryentries");
 }
 
 /**

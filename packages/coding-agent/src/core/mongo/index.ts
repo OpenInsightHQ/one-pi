@@ -53,6 +53,16 @@ export {
 } from "./conversation-service.js";
 // Connection management
 export { connectMongo, disconnectMongo, getCachedConnection, getDb, isMongoEnabled } from "./db.js";
+// Long-term memory service
+export {
+	formatMemoriesPrompt,
+	getUserMemoriesWithAccess,
+	hasMemoryReadPermission,
+	type MemoryConversation,
+	type MemoryDetail,
+	readConversationByMemory,
+	readMemoryDetail,
+} from "./memory-service.js";
 // Models
 export {
 	type AccessRoleModel,
@@ -64,28 +74,43 @@ export {
 	getAclEntryModel,
 	getAgentModel,
 	getConversationModel,
+	getMemoryEntryModel,
 	getMessageModel,
 	getRoleModel,
 	getSkillModel,
+	getSystemPromptModel,
 	getTaskQueueModel,
+	getUserModel,
 	getUserRoleModel,
+	type MemoryEntryModel,
 	type MessageModel,
 	type RoleModel,
 	type SkillModel,
+	type SystemPromptModel,
 	type TaskQueueModel,
+	type UserModel,
 	type UserRoleModel,
 } from "./models.js";
+// System-prompt catalog service
+export {
+	type AvailablePrompt,
+	formatAvailablePromptsPrompt,
+	getAccessiblePiPrompts,
+} from "./prompt-service.js";
 // Schemas (for advanced/custom usage)
 export {
 	accessRoleSchema,
 	aclEntrySchema,
 	agentSchema,
 	conversationSchema,
+	memoryEntrySchema,
 	messageSchema,
 	roleSchema,
 	skillSchema,
+	systemPromptSchema,
 	taskQueueSchema,
 	userRoleSchema,
+	userSchema,
 } from "./schemas.js";
 // Skill catalog service
 export {
@@ -122,6 +147,9 @@ export {
 	type AgentSkillRef,
 	type ConversationDoc,
 	hasPermissions,
+	type MemoryEntryDoc,
+	type MemorySourceDoc,
+	type MemoryType,
 	type MessageDoc,
 	PermissionBits,
 	type Principal,
@@ -131,6 +159,8 @@ export {
 	RoleBits,
 	type RoleDoc,
 	type SkillDoc,
+	type SystemPromptDoc,
 	type TaskQueueDoc,
+	type UserDoc,
 	type UserRoleDoc,
 } from "./types.js";

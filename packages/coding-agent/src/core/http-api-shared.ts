@@ -9,8 +9,12 @@ import type { AgentSession } from "./agent-session.js";
 import {
 	checkAgentSkillPermission,
 	checkSkillPermission,
+	formatAvailablePromptsPrompt,
+	formatMemoriesPrompt,
+	getAccessiblePiPrompts,
 	getAgentSkillDirs,
 	getAuthorizedSkillDirs,
+	getUserMemoriesWithAccess,
 	isAgentPrincipalId,
 } from "./mongo/index.js";
 import type { ResourceLoader } from "./resource-loader.js";
@@ -314,6 +318,48 @@ export function getBaseUrl(): string {
 	const httpHost = "0.0.0.0";
 	const httpPort = 3000;
 	return `http://${httpHost}:${httpPort}`;
+}
+
+/**
+ * Builds the per-user context appended to the system prompt on every turn
+ * (migrated from arp's pi.system prompt composition):
+ *
+ *   1. `<available_prompts>` — pi-flagged system prompts (`systemprompts`
+ *      collection) the user has ACL VIEW permission on, with their
+ *      server-local file locations.
+ *   2. `[用户长期记忆]` — the user's long-term memories (`memoryentries`
+ *      collection), gated by role MEMORIES USE+READ and the personalization
+ *      opt-out.
+ *
+ * Each section is fetched independently; failures degrade to an empty string
+ * so a MongoDB hiccup never blocks the chat turn.
+ */
+export async function buildUserContextSuffix(userId: string): Promise<string> {
+	if (!userId || userId === "system") return "";
+
+	const parts: string[] = [];
+
+	try {
+		const prompts = await getAccessiblePiPrompts(userId);
+		const promptsText = formatAvailablePromptsPrompt(prompts);
+		if (promptsText) parts.push(promptsText);
+	} catch (error) {
+		const msg = error instanceof Error ? error.message : String(error);
+		console.warn(`[HTTP] Failed to load available prompts for user ${userId}: ${msg}`);
+	}
+
+	try {
+		const memories = await getUserMemoriesWithAccess(userId);
+		if (memories) {
+			const memoriesText = formatMemoriesPrompt(memories);
+			if (memoriesText) parts.push(memoriesText);
+		}
+	} catch (error) {
+		const msg = error instanceof Error ? error.message : String(error);
+		console.warn(`[HTTP] Failed to load memories for user ${userId}: ${msg}`);
+	}
+
+	return parts.join("\n\n");
 }
 
 export function createDmpSpawnHook(userId: string, agentId: string, sessionId: string) {

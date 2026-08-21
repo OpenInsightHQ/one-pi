@@ -142,6 +142,8 @@ Sessions are multi-tenant: keyed by `agentId + sessionId`, with per-user working
 - Skill names starting with `dmp-` automatically get DMP context headers (`X-User-Id`, `X-Agent-Id`, `X-Conversation-Id`) injected into their API definitions and Python scripts.
 - Skills are stored on disk as `SKILL.md` + `apis.json` + `scripts/main.py` directories under `SKILL_REPO_DIR/<category>/<name>/`.
 - The `/prompt` and `/v1/chat/completions` endpoints auto-append DMP context to the system prompt when `X-User-Id` is present.
+- User-context system-prompt appending (migrated from arp): on `/prompt` (non-skill-execution) and `/v1/chat/completions` turns, pi appends `<available_prompts>` (MongoDB `systemprompts`, `piPrompt: true`, ACL VIEW on `resourceType: systemPrompt`) and the `[用户长期记忆]` memory block (MongoDB `memoryentries`, gated by role `MEMORIES.USE`+`READ` and the `users.personalization.memories` opt-out) before the `[DMP Context]` suffix.
+- When the user has memory access and at least one memory entry, the `read_memory_detail` and `read_memory_conversation` tools (reading `memoryentries` + `messages`, scoped to the session user) are injected into HTTP API sessions.
 - Chunked file uploads use a 3-step flow: `/files/upload/init` → `/files/upload/chunk` → `/files/upload/complete`, with 24-hour session expiry.
 - Upload limits are configurable via `HttpServerOptions.uploadLimits` (default: 100MB per file, 500MB total).
 
@@ -150,11 +152,13 @@ Sessions are multi-tenant: keyed by `agentId + sessionId`, with per-user working
 The coding agent integrates with MongoDB to share data with the arp (LibreChat) system. Source files are in `packages/coding-agent/src/core/mongo/`:
 
 - `db.ts` — Connection manager (`connectMongo`, `getDb`, `isMongoEnabled`, `disconnectMongo`). Cached singleton, graceful fallback when `MONGO_URI` is unset (personal-skills-only mode).
-- `types.ts` — Constants (`PrincipalType`, `ResourceType`, `PermissionBits`, `RoleBits`), `hasPermissions()` helper, document interfaces matching the on-disk shape written by the Java/yudao backend. Also includes `MessageDoc` and `ConversationDoc` for the conversation history collections.
-- `schemas.ts` — Mongoose schemas for `skills`, `accessroles`, `aclentries`, `userroles`, `roles`, `messages`, `conversations` collections. All `{ strict: false }` to preserve `_class`/`__v` fields from the Java backend.
-- `models.ts` — Lazy model accessors (`getSkillModel`, `getAclEntryModel`, `getMessageModel`, `getConversationModel`, etc.).
+- `types.ts` — Constants (`PrincipalType`, `ResourceType`, `PermissionBits`, `RoleBits`), `hasPermissions()` helper, document interfaces matching the on-disk shape written by the Java/yudao backend. Also includes `MessageDoc` and `ConversationDoc` for the conversation history collections, plus `SystemPromptDoc`, `MemoryEntryDoc`, and `UserDoc`.
+- `schemas.ts` — Mongoose schemas for `skills`, `accessroles`, `aclentries`, `userroles`, `roles`, `messages`, `conversations`, `systemprompts`, `memoryentries`, `users` collections. All `{ strict: false }` to preserve `_class`/`__v` fields from the Java backend.
+- `models.ts` — Lazy model accessors (`getSkillModel`, `getAclEntryModel`, `getMessageModel`, `getConversationModel`, `getSystemPromptModel`, `getMemoryEntryModel`, `getUserModel`, etc.).
 - `acl.ts` — ACL service: `resolveUserPrincipals` (user → [USER, ROLE..., PUBLIC]), `checkPermission`, `findAccessibleResourceIds`, `getEffectivePermissions`.
 - `skill-catalog.ts` — `getAuthorizedSkillDirs`, `getAuthorizedSkills`, `checkSkillPermission`, `filterAuthorizedSkillNames`.
+- `prompt-service.ts` — ACL-filtered `<available_prompts>` listing: `getAccessiblePiPrompts` (systemprompts with `piPrompt: true` + ACL VIEW on `resourceType: systemPrompt`), `formatAvailablePromptsPrompt`.
+- `memory-service.ts` — Long-term memory: `getUserMemoriesWithAccess` (role `MEMORIES.USE`+`READ` check + personalization opt-out), `formatMemoriesPrompt` (`[用户长期记忆]` block), `readMemoryDetail`, `readConversationByMemory` (back the `read_memory_detail` / `read_memory_conversation` tools, scoped to the session user).
 - `conversation-service.ts` — Conversation history persistence: `saveMessageToMongo`, `saveConversationToMongo`, `loadConversationMessages`, `getLastMessageId`. Stores user/assistant/toolResult messages with arp-compatible fields plus a full `agentMessage` field for context reconstruction.
 - `index.ts` — Public API barrel export.
 
