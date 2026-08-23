@@ -122,6 +122,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 	addGuideline("Be concise in your responses");
 	addGuideline("Show file paths clearly when working with files");
 	addGuideline("Search for files starting from the current working directory, not the filesystem root");
+	addGuideline("Generate all files inside the current working directory, never outside it");
 
 	const guidelines = guidelinesList.map((g) => `- ${g}`).join("\n");
 
