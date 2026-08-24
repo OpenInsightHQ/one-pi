@@ -120,6 +120,7 @@ interface MessageDocData {
 	inputTokenCount?: number;
 	recursionLimit?: string;
 	metadata?: Record<string, unknown>;
+	createdAt?: Date;
 }
 
 function buildMessageDoc(
@@ -141,6 +142,12 @@ function buildMessageDoc(
 		text: "",
 		model: PI_MODEL,
 		agentMessage: message,
+		// Persist the agent message's own creation time, not the DB insert
+		// time: arp/LibreChat fetches messages sorted by createdAt, and the
+		// user message must sort before the assistant reply of the same turn.
+		// Insert-time defaults can invert that order when the dual writers
+		// (arp pipeline + pi persistence) race, forking the message tree.
+		createdAt: new Date(message.timestamp),
 	};
 
 	if (message.role === "user") {
