@@ -58,3 +58,34 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  release-source:
+    # v3.0.2 格式标签 -> 源码包 pi-3.0.2.tar.gz 发布到 GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create source tarball
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          git archive --format=tar.gz --prefix="pi-${VERSION}/" -o "pi-${VERSION}.tar.gz" "${GITHUB_SHA}"
+          sha256sum "pi-${VERSION}.tar.gz" > "pi-${VERSION}.tar.gz.sha256"
+          ls -lh pi-*
+
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "pi-${VERSION}.tar.gz" "pi-${VERSION}.tar.gz.sha256" --clobber
+          else
+            gh release create "$TAG" "pi-${VERSION}.tar.gz" "pi-${VERSION}.tar.gz.sha256" --title "$TAG" --generate-notes
+          fi
