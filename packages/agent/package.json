@@ -27,7 +27,7 @@
 		"state-management"
 	],
 	"author": "Mario Zechner",
-	"license": "MIT",
+	"license": "Apache-2.0",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/OpenInsightHQ/pi-agent.git",
