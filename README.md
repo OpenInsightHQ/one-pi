@@ -51,14 +51,8 @@ a tool set, not a new codebase.
 
 ## Decoupled resources, composed agents
 
-The resource model is deliberately flat. Four kinds of resources exist independently:
-
-| Resource | What it is |
-| --- | --- |
-| **Prompts** | Instructions that define behavior and expertise |
-| **Skills** | Reusable capabilities — a directory with a spec, scripts, resources |
-| **MCP servers** | External tools connected via Model Context Protocol |
-| **APIs** | Enterprise systems exposed as callable endpoints |
+The resource model is deliberately flat: prompts, skills, MCP servers, and APIs
+exist independently of agents.
 
 - **An agent is a composition, not code** — a shortcut entry that binds one prompt
   to a set of tools. Prompt + skills + MCP = a working expert.
