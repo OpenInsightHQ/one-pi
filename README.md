@@ -49,16 +49,39 @@ specialist with its own tools:
 Experts are cheap to define and endlessly extensible: a new expert is a prompt plus
 a tool set, not a new codebase.
 
-## Skills: build once, every agent can call it
+## Decoupled resources, composed agents
 
-Skills are the platform's capability library. A skill is a directory with a spec —
-a frontmatter manifest plus scripts and resources. Skills live in a skill repository
-(`SKILL_REPO_DIR`) and are discovered automatically.
+The resource model is deliberately flat. Four kinds of resources exist independently:
 
-The same skill system is shared with ARP — this is what *"Any skill"* in the
-[ARP README](https://github.com/OpenInsightHQ/arp#why-arp) refers to. An enterprise
-builds a skill once (say, *query the sales warehouse*); every agent and every expert
-on the platform can invoke it at runtime.
+| Resource | What it is |
+| --- | --- |
+| **Prompts** | Instructions that define behavior and expertise |
+| **Skills** | Reusable capabilities — a directory with a spec, scripts, resources |
+| **MCP servers** | External tools connected via Model Context Protocol |
+| **APIs** | Enterprise systems exposed as callable endpoints |
+
+- **An agent is a composition, not code** — a shortcut entry that binds one prompt
+  to a set of tools. Prompt + skills + MCP = a working expert.
+- **Prompts lead to skills** — a prompt carries the context that lets PI locate the
+  right skill at runtime, so experts find their own tools.
+- **Permission-scoped by directory** — every resource lives in a directory tree,
+  and user permissions are scoped by directory: a user's agents see exactly the
+  prompts and skills granted to them, nothing more.
+- **Safe by construction** — enterprise agents have no CLI. No shell, no direct
+  filesystem writes: every action flows through governed skills, MCP servers, and
+  APIs.
+
+The skill system is shared with ARP — this is what *"Any skill"* in the
+[ARP README](https://github.com/OpenInsightHQ/arp#why-arp) refers to. Build a skill
+once (say, *query the sales warehouse*); every agent and every expert on the
+platform can invoke it at runtime.
+
+## Agent collaboration
+
+In ARP, users @mention agents into a conversation and the agents cooperate in one
+thread. When collaboration needs the *right* expert without an explicit @,
+semantic routing resolves the call — and that resolution runs through ONE-PI,
+where the prompts, skills, and permissions live.
 
 ## Server mode: an agent loop behind an OpenAI-compatible API
 
@@ -96,9 +119,15 @@ Monorepo with lockstep versioning:
 | `mom` | Slack bot that delegates to the agent |
 | `pods` | CLI for managing vLLM deployments on GPU pods |
 
-## Quick Start
+## Getting Started
 
-### Run as a server (Docker)
+The recommended entry point for the whole platform is
+[openinsight](https://github.com/OpenInsightHQ/openinsight) — one command brings up
+ARP, ONE-PI, and the data layer as a working stack. A lone component is not the
+product.
+
+**Run ONE-PI standalone** (development & integration testing — it runs as an
+OpenAI-compatible agent endpoint):
 
 ```bash
 cp .env.example .env          # set PI_API_KEY + one provider key
@@ -112,7 +141,7 @@ curl http://localhost:3000/v1/chat/completions \
   -d '{"model":"minimax-m2.7","messages":[{"role":"user","content":"hello"}]}'
 ```
 
-### Run locally (CLI)
+CLI mode (interactive):
 
 ```bash
 npm install
