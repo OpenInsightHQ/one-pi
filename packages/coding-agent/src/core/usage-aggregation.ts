@@ -41,7 +41,6 @@ export interface AggregatedUsage extends UsageTotals {
 	cache_read_tokens: number;
 	cache_write_tokens: number;
 }
-
 export function aggregateUsage(current: AggregatedUsage | undefined, usage: PiUsage): AggregatedUsage {
 	const input = usage.input + usage.cacheRead + usage.cacheWrite;
 	const output = usage.output;
@@ -64,5 +63,26 @@ export function aggregateUsage(current: AggregatedUsage | undefined, usage: PiUs
 		totalOutputTokens: previous.totalOutputTokens + usage.output,
 		totalCacheReadTokens: previous.totalCacheReadTokens + usage.cacheRead,
 		totalCacheWriteTokens: previous.totalCacheWriteTokens + usage.cacheWrite,
+	};
+}
+
+/**
+ * View of the aggregated usage for external OpenAI-style consumers (SSE `usage`
+ * event on `/prompt`, JSON response). A pi turn contains N internal model calls
+ * (tool loop), each re-sending the full context — consumers like arp treat
+ * `prompt_tokens` as the prompt of a single call and subtract context messages
+ * from it, so the cumulative prompt would be inflated by ~N times. This keeps
+ * the OpenAI-style fields scoped to the FIRST call of the turn (the prompt that
+ * contained the user message — matching arp's native-agent `firstUsage`
+ * semantics), while the `total*` fields stay turn-cumulative.
+ */
+export function firstCallUsageView(agg: AggregatedUsage, first: PiUsage): AggregatedUsage {
+	const promptTokens = first.input + first.cacheRead + first.cacheWrite;
+	return {
+		...agg,
+		prompt_tokens: promptTokens,
+		cache_read_tokens: first.cacheRead,
+		cache_write_tokens: first.cacheWrite,
+		total_tokens: promptTokens + agg.completion_tokens,
 	};
 }

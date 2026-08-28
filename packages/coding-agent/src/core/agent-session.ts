@@ -762,6 +762,10 @@ export class AgentSession {
 			// Assistant message: merge consecutive assistant messages within the same turn
 			if (message.role === "assistant") {
 				const assistantMsg = message as AssistantMessage;
+				// Turn-cumulative usage written onto the turn's assistant document.
+				// Persist events are serialized through _mongoPersistChain, so at
+				// this point state contains exactly the calls of the turn so far.
+				const turnUsageTotals = this._getTurnUsageTotalsFromState();
 
 				if (this._mongoTurnAssistantId) {
 					// Same turn — merge content into existing assistant document
@@ -769,6 +773,7 @@ export class AgentSession {
 						this._conversationPersistence,
 						this._mongoTurnAssistantId,
 						assistantMsg,
+						turnUsageTotals,
 					);
 				} else {
 					// New assistant document for this turn
@@ -781,6 +786,7 @@ export class AgentSession {
 						parentMessageId,
 						providedResponseMessageId,
 						this._turnHidden,
+						turnUsageTotals,
 					);
 					if (messageId) {
 						this._mongoTurnAssistantId = messageId;
@@ -3466,6 +3472,24 @@ export class AgentSession {
 	private _getSessionUsageTotals(): UsageTotals {
 		const totals = emptyUsageTotals();
 		for (const message of this.state.messages) {
+			if (message.role === "assistant") {
+				addUsageToTotals(totals, (message as AssistantMessage).usage);
+			}
+		}
+		return totals;
+	}
+
+	/**
+	 * Cumulative usage of the current Mongo turn: all assistant messages after
+	 * the last user message in session state. Matches the Mongo turn boundary
+	 * (every persisted user message starts a new turn's assistant document).
+	 */
+	private _getTurnUsageTotalsFromState(): UsageTotals {
+		const totals = emptyUsageTotals();
+		const messages = this.state.messages;
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const message = messages[i];
+			if (message.role === "user") break;
 			if (message.role === "assistant") {
 				addUsageToTotals(totals, (message as AssistantMessage).usage);
 			}

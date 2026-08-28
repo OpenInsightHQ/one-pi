@@ -31,7 +31,7 @@ import { findMostRecentSession, SessionManager } from "./session-manager.js";
 import { createLibreChatTools } from "./tools/document-generator.js";
 import { getCachedMCPTools } from "./tools/mcp-registry.js";
 import { createMemoryAgentTools } from "./tools/memory-tools.js";
-import { type AggregatedUsage, aggregateUsage } from "./usage-aggregation.js";
+import { type AggregatedUsage, aggregateUsage, firstCallUsageView, type PiUsage } from "./usage-aggregation.js";
 
 interface PromptRequestBody {
 	message: string;
@@ -260,6 +260,9 @@ async function handlePromptInternal(
 	let finalMessage: string = "";
 	let responseSent = false;
 	let collectedUsage: AggregatedUsage | undefined;
+	/** Usage of the FIRST model call of this turn — basis for the OpenAI-style
+	 *  fields emitted to consumers (see firstCallUsageView). */
+	let firstCallUsage: PiUsage | undefined;
 	const generatedFiles: {
 		name: string;
 		path: string;
@@ -345,12 +348,14 @@ async function handlePromptInternal(
 			const textContent = msg.content.find((c) => c.type === "text");
 			finalMessage = textContent?.text ?? "";
 			if (msg.usage) {
-				collectedUsage = aggregateUsage(collectedUsage, {
+				const call: PiUsage = {
 					input: msg.usage.input || 0,
 					output: msg.usage.output || 0,
 					cacheRead: msg.usage.cacheRead || 0,
 					cacheWrite: msg.usage.cacheWrite || 0,
-				});
+				};
+				collectedUsage = aggregateUsage(collectedUsage, call);
+				firstCallUsage ??= call;
 			}
 			if (msg.stopReason === "error" && msg.errorMessage) {
 				responseSent = true;
@@ -486,9 +491,14 @@ async function handlePromptInternal(
 		});
 
 		if (!responseSent) {
+			// OpenAI-style fields scoped to the FIRST call of the turn (external
+			// consumers like arp treat prompt_tokens as a single call's prompt);
+			// total* fields carry the turn-cumulative usage.
+			const usagePayload =
+				collectedUsage && firstCallUsage ? firstCallUsageView(collectedUsage, firstCallUsage) : undefined;
 			if (streamMode) {
-				if (collectedUsage) {
-					emit("usage", collectedUsage);
+				if (usagePayload) {
+					emit("usage", usagePayload);
 				}
 				emit("done", {
 					message: finalMessage,
@@ -502,8 +512,8 @@ async function handlePromptInternal(
 					sessionId,
 					cwd: session.sessionManager.getCwd(),
 					newSession: isNewSession,
-					// Turn usage: per-call breakdown plus total* cumulative counters
-					usage: collectedUsage,
+					// Turn usage: first-call prompt fields plus total* cumulative counters
+					usage: usagePayload,
 				});
 			}
 		}

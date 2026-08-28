@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { addUsageToTotals, aggregateUsage, emptyUsageTotals, type UsageTotals } from "../src/core/usage-aggregation.js";
+import {
+	addUsageToTotals,
+	aggregateUsage,
+	emptyUsageTotals,
+	firstCallUsageView,
+	type UsageTotals,
+} from "../src/core/usage-aggregation.js";
 
 describe("aggregateUsage", () => {
 	it("accumulates all model calls and includes cached prompt tokens", () => {
@@ -79,5 +85,32 @@ describe("UsageTotals", () => {
 			totalCacheReadTokens: 33,
 			totalCacheWriteTokens: 44,
 		});
+	});
+});
+
+describe("firstCallUsageView", () => {
+	it("scopes OpenAI-style fields to the first call while total* stay cumulative", () => {
+		const first = { input: 8_424, output: 1_418, cacheRead: 40_960, cacheWrite: 0 };
+		let agg = aggregateUsage(undefined, first);
+		agg = aggregateUsage(agg, { input: 500, output: 1670, cacheRead: 51_000, cacheWrite: 100 });
+
+		const view = firstCallUsageView(agg, first);
+		// First call's prompt only — NOT the cumulative sum over all calls
+		expect(view.prompt_tokens).toBe(49_384);
+		expect(view.cache_read_tokens).toBe(40_960);
+		expect(view.cache_write_tokens).toBe(0);
+		// Outputs stay cumulative (matches arp native-agent output accounting)
+		expect(view.completion_tokens).toBe(3_088);
+		expect(view.total_tokens).toBe(49_384 + 3_088);
+		// Turn-cumulative counters untouched
+		expect(view.totalInputTokens).toBe(8_924);
+		expect(view.totalCacheReadTokens).toBe(91_960);
+		expect(view.totalCacheWriteTokens).toBe(100);
+	});
+
+	it("single-call turn is unchanged by the view", () => {
+		const first = { input: 5_192, output: 81, cacheRead: 0, cacheWrite: 0 };
+		const agg = aggregateUsage(undefined, first);
+		expect(firstCallUsageView(agg, first)).toEqual(agg);
 	});
 });

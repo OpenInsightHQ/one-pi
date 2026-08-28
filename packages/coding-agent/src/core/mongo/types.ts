@@ -254,6 +254,12 @@ export interface MessageDoc {
 	outputTokens?: number;
 	cacheReadTokens?: number;
 	cacheWriteTokens?: number;
+	/** Turn-cumulative usage on the turn's assistant document: sum over all model
+	 *  calls of the turn (user message → next user message). */
+	totalInputTokens?: number;
+	totalOutputTokens?: number;
+	totalCacheReadTokens?: number;
+	totalCacheWriteTokens?: number;
 	sender?: string;
 	text?: string;
 	streamLog?: string;

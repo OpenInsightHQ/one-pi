@@ -127,6 +127,11 @@ interface MessageDocData {
 	outputTokens?: number;
 	cacheReadTokens?: number;
 	cacheWriteTokens?: number;
+	/** Turn-cumulative usage on the turn's assistant document (all calls of the turn). */
+	totalInputTokens?: number;
+	totalOutputTokens?: number;
+	totalCacheReadTokens?: number;
+	totalCacheWriteTokens?: number;
 	recursionLimit?: string;
 	metadata?: Record<string, unknown>;
 	createdAt?: Date;
@@ -138,6 +143,7 @@ function buildMessageDoc(
 	parentMessageId: string,
 	overrideMessageId?: string,
 	forceHidden?: boolean,
+	turnUsageTotals?: UsageTotals,
 ): MessageDocData {
 	const messageId = overrideMessageId || generateMessageId(message.role);
 	const base: MessageDocData = {
@@ -192,6 +198,13 @@ function buildMessageDoc(
 			base.cacheWriteTokens = assistantMsg.usage.cacheWrite;
 			// Legacy arp-compatible field
 			base.inputTokenCount = assistantMsg.usage.input;
+			// Turn-cumulative totals (all model calls of this turn so far)
+			if (turnUsageTotals) {
+				base.totalInputTokens = turnUsageTotals.totalInputTokens;
+				base.totalOutputTokens = turnUsageTotals.totalOutputTokens;
+				base.totalCacheReadTokens = turnUsageTotals.totalCacheReadTokens;
+				base.totalCacheWriteTokens = turnUsageTotals.totalCacheWriteTokens;
+			}
 		}
 		base.recursionLimit = `1/${PI_MAX_RECURSION}`;
 	} else if (message.role === "toolResult") {
@@ -232,10 +245,11 @@ export async function saveMessageToMongo(
 	parentMessageId: string,
 	overrideMessageId?: string,
 	forceHidden?: boolean,
+	turnUsageTotals?: UsageTotals,
 ): Promise<string | null> {
 	if (!isMongoEnabled()) return null;
 
-	const doc = buildMessageDoc(ctx, message, parentMessageId, overrideMessageId, forceHidden);
+	const doc = buildMessageDoc(ctx, message, parentMessageId, overrideMessageId, forceHidden, turnUsageTotals);
 
 	try {
 		const Message = getMessageModel();
@@ -276,6 +290,7 @@ export async function mergeAssistantMessageInMongo(
 	ctx: ConversationPersistenceContext,
 	targetMessageId: string,
 	message: AssistantMessage,
+	turnUsageTotals?: UsageTotals,
 ): Promise<void> {
 	if (!isMongoEnabled()) return;
 
@@ -287,7 +302,7 @@ export async function mergeAssistantMessageInMongo(
 		> | null;
 		if (!existing) {
 			// Target not found — fallback to creating a new document
-			await saveMessageToMongo(ctx, message, NO_PARENT);
+			await saveMessageToMongo(ctx, message, NO_PARENT, undefined, undefined, turnUsageTotals);
 			return;
 		}
 
@@ -324,6 +339,13 @@ export async function mergeAssistantMessageInMongo(
 			update.cacheWriteTokens = message.usage.cacheWrite;
 			// Legacy arp-compatible field
 			update.inputTokenCount = message.usage.input;
+		}
+		// Turn-cumulative totals (all model calls of this turn so far)
+		if (turnUsageTotals) {
+			update.totalInputTokens = turnUsageTotals.totalInputTokens;
+			update.totalOutputTokens = turnUsageTotals.totalOutputTokens;
+			update.totalCacheReadTokens = turnUsageTotals.totalCacheReadTokens;
+			update.totalCacheWriteTokens = turnUsageTotals.totalCacheWriteTokens;
 		}
 
 		// Update agentMessage to the latest assistant message
