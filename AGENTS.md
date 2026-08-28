@@ -185,6 +185,8 @@ Pi persists conversation history (user messages, assistant responses, tool resul
 
 Constants: `endpoint: "pi"`, `endpointType: "pi"`, `model: "one-pi"`, `agent_id: "pi__one-pi___one-pi"`.
 
+**Token accounting caliber (shared with arp)**: pi and arp (repo: `arp-github`, see its AGENTS.md "Token Accounting") record the same token fields on assistant message documents with identical semantics — per-call `inputTokens`/`outputTokens`/`cacheReadTokens`/`cacheWriteTokens` (one actual model call; input excludes cache) and cumulative `totalInputTokens`/`totalOutputTokens`/`totalCacheReadTokens`/`totalCacheWriteTokens` (turn scope on messages, session scope on conversations). The two sides' statistics calibers MUST stay consistent: when changing any of these fields or their calculation on one side, update the other side in the same change. On pi endpoint flows arp does NOT write these fields (pi owns the documents); arp writes them itself for native agent flows (frontend chat via `AgentClient.recordCollectedUsage` + `BaseClient.sendMessage`, v2 API in `v2.js`). pi's `/prompt` SSE `usage` keeps `prompt_tokens`/`cache_*_tokens` scoped to the first model call of the turn because arp's `calculateCurrentTokenCount` treats them as a single call's prompt.
+
 ### Skill permission model
 
 Skills come from two sources:
