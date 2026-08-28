@@ -188,16 +188,19 @@ function buildMessageDoc(
 		base.finish_reason = mapStopReason(assistantMsg.stopReason);
 		base.error = assistantMsg.stopReason === "error";
 		base.model = assistantMsg.model || PI_MODEL;
-		// Own-size token count of this message's text/thinking/tool-call args
-		base.tokenCount = assistantMsg.tokenCount ?? estimateTokens(message);
+		// arp-compatible tokenCount semantics: cumulative output tokens of the
+		// turn (arp/LibreChat context accounting depends on it). The strict
+		// per-message own-size caliber lives in agentMessage.tokenCount.
+		base.tokenCount = turnUsageTotals?.totalOutputTokens ?? assistantMsg.usage?.output ?? estimateTokens(message);
 		if (assistantMsg.usage) {
 			// Per-model-call usage — recorded separately, never folded into tokenCount
 			base.inputTokens = assistantMsg.usage.input;
 			base.outputTokens = assistantMsg.usage.output;
 			base.cacheReadTokens = assistantMsg.usage.cacheRead;
 			base.cacheWriteTokens = assistantMsg.usage.cacheWrite;
-			// Legacy arp-compatible field
-			base.inputTokenCount = assistantMsg.usage.input;
+			// Legacy arp-compatible field: full prompt of the call INCL. cache
+			// (arp/LibreChat context accounting subtracts message estimates from it)
+			base.inputTokenCount = assistantMsg.usage.input + assistantMsg.usage.cacheRead + assistantMsg.usage.cacheWrite;
 			// Turn-cumulative totals (all model calls of this turn so far)
 			if (turnUsageTotals) {
 				base.totalInputTokens = turnUsageTotals.totalInputTokens;
@@ -213,7 +216,7 @@ function buildMessageDoc(
 		base.isCreatedByUser = false;
 		base.text = extractText(toolMsg.content);
 		base.model = PI_MODEL;
-		// Own-size token count of this message's content (not call usage)
+		// Own-size token count of this message's text (not call usage, not cumulative)
 		base.tokenCount = toolMsg.tokenCount ?? estimateTokens(message);
 	}
 
@@ -329,16 +332,18 @@ export async function mergeAssistantMessageInMongo(
 			error: message.stopReason === "error",
 		};
 
-		// Own-size token count of the merged text (not call usage, not cumulative)
-		update.tokenCount = Math.ceil(mergedText.length / 4);
+		// arp-compatible tokenCount: cumulative output of the turn so far.
+		// inputTokenCount is intentionally NOT updated: it keeps the first
+		// call's full prompt, matching arp's firstUsage-based semantics.
+		if (turnUsageTotals) {
+			update.tokenCount = turnUsageTotals.totalOutputTokens;
+		}
 		if (message.usage) {
 			// Per-model-call usage of the latest call — separate fields, never tokenCount
 			update.inputTokens = message.usage.input;
 			update.outputTokens = message.usage.output;
 			update.cacheReadTokens = message.usage.cacheRead;
 			update.cacheWriteTokens = message.usage.cacheWrite;
-			// Legacy arp-compatible field
-			update.inputTokenCount = message.usage.input;
 		}
 		// Turn-cumulative totals (all model calls of this turn so far)
 		if (turnUsageTotals) {
@@ -432,7 +437,7 @@ export async function updateToolCallOutputInMongo(
  */
 export async function saveConversationToMongo(
 	ctx: ConversationPersistenceContext,
-	options?: { title?: string; finishReason?: string; usageTotals?: UsageTotals },
+	options?: { title?: string; finishReason?: string },
 ): Promise<void> {
 	if (!isMongoEnabled()) return;
 
@@ -447,7 +452,7 @@ export async function saveConversationToMongo(
 				"metadata.isSubagentTrace": { $ne: true },
 				"metadata.hiddenFromTree": { $ne: true },
 			},
-			"_id",
+			"_id totalInputTokens totalOutputTokens totalCacheReadTokens totalCacheWriteTokens",
 		)
 			.sort({ createdAt: 1 })
 			.lean();
@@ -480,13 +485,29 @@ export async function saveConversationToMongo(
 		if (options?.finishReason !== undefined) {
 			update.finish_reason = options.finishReason;
 		}
-		// Cumulative session usage totals for metering/display
-		if (options?.usageTotals) {
-			update.totalInputTokens = options.usageTotals.totalInputTokens;
-			update.totalOutputTokens = options.usageTotals.totalOutputTokens;
-			update.totalCacheReadTokens = options.usageTotals.totalCacheReadTokens;
-			update.totalCacheWriteTokens = options.usageTotals.totalCacheWriteTokens;
-		}
+		// Session-cumulative usage totals, recomputed as the sum of every
+		// assistant document's turn totals (all executed turns — the same
+		// "actual consumption" caliber arp accumulates incrementally).
+		const totals = messageDocs.reduce(
+			(acc, doc) => {
+				const d = doc as Record<string, unknown>;
+				acc.totalInputTokens += (d.totalInputTokens as number | undefined) ?? 0;
+				acc.totalOutputTokens += (d.totalOutputTokens as number | undefined) ?? 0;
+				acc.totalCacheReadTokens += (d.totalCacheReadTokens as number | undefined) ?? 0;
+				acc.totalCacheWriteTokens += (d.totalCacheWriteTokens as number | undefined) ?? 0;
+				return acc;
+			},
+			{
+				totalInputTokens: 0,
+				totalOutputTokens: 0,
+				totalCacheReadTokens: 0,
+				totalCacheWriteTokens: 0,
+			},
+		);
+		update.totalInputTokens = totals.totalInputTokens;
+		update.totalOutputTokens = totals.totalOutputTokens;
+		update.totalCacheReadTokens = totals.totalCacheReadTokens;
+		update.totalCacheWriteTokens = totals.totalCacheWriteTokens;
 
 		await Conversation.findOneAndUpdate(
 			{ conversationId: ctx.conversationId, user: ctx.userId },
@@ -564,7 +585,10 @@ function reconstructAgentMessage(doc: Record<string, unknown>): AgentMessage[] {
 	const content = doc.content as Array<{ type: string; [key: string]: unknown }> | undefined;
 	const model = (doc.model as string) || PI_MODEL;
 	const tokenCount = doc.tokenCount as number | undefined;
+	// arp writes inputTokenCount as the call's full prompt INCL. cache
 	const inputTokenCount = doc.inputTokenCount as number | undefined;
+	const cacheReadTokens = (doc.cacheReadTokens as number | undefined) ?? 0;
+	const cacheWriteTokens = (doc.cacheWriteTokens as number | undefined) ?? 0;
 	const finishReason = doc.finish_reason as string | undefined;
 	const createdAt = doc.createdAt;
 	const timestamp = createdAt ? new Date(createdAt as string).getTime() : Date.now();
@@ -649,7 +673,10 @@ function reconstructAgentMessage(doc: Record<string, unknown>): AgentMessage[] {
 		return [];
 	}
 
-	const inputTokens = inputTokenCount ?? 0;
+	// arp's inputTokenCount is the full prompt incl. cache; pi's usage.input
+	// is the fresh (non-cached) input — subtract the cache tokens (clamped).
+	const fullPromptTokens = inputTokenCount ?? 0;
+	const inputTokens = Math.max(0, fullPromptTokens - cacheReadTokens - cacheWriteTokens);
 	const outputTokens = tokenCount ?? 0;
 	const messages: AgentMessage[] = [
 		{
@@ -661,9 +688,9 @@ function reconstructAgentMessage(doc: Record<string, unknown>): AgentMessage[] {
 			usage: {
 				input: inputTokens,
 				output: outputTokens,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: inputTokens + outputTokens,
+				cacheRead: cacheReadTokens,
+				cacheWrite: cacheWriteTokens,
+				totalTokens: fullPromptTokens + outputTokens,
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			},
 			stopReason: mapFinishReasonToStopReason(finishReason),

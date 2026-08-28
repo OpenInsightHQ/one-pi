@@ -718,9 +718,7 @@ export class AgentSession {
 				const toolMsg = message as ToolResultMessage;
 				const outputText = this._extractToolResultText(toolMsg);
 				await updateToolCallOutputInMongo(this._conversationPersistence, toolMsg.toolCallId, outputText);
-				await saveConversationToMongo(this._conversationPersistence, {
-					usageTotals: this._getSessionUsageTotals(),
-				});
+				await saveConversationToMongo(this._conversationPersistence, {});
 				return;
 			}
 
@@ -749,9 +747,7 @@ export class AgentSession {
 					// point so the following assistant reply attaches there.
 					this._lastMongoMessageId = messageId;
 				}
-				const convoOptions: { title?: string; finishReason?: string; usageTotals?: UsageTotals } = {
-					usageTotals: this._getSessionUsageTotals(),
-				};
+				const convoOptions: { title?: string; finishReason?: string } = {};
 				if (wasNewConversation && !isHiddenInjection) {
 					convoOptions.title = deriveTitle(userText);
 				}
@@ -794,9 +790,8 @@ export class AgentSession {
 					}
 				}
 
-				const convoOptions: { finishReason?: string; usageTotals?: UsageTotals } = {
+				const convoOptions: { finishReason?: string } = {
 					finishReason: assistantMsg.stopReason,
-					usageTotals: this._getSessionUsageTotals(),
 				};
 				await saveConversationToMongo(this._conversationPersistence, convoOptions);
 				return;
@@ -813,9 +808,7 @@ export class AgentSession {
 			if (messageId) {
 				this._lastMongoMessageId = messageId;
 			}
-			await saveConversationToMongo(this._conversationPersistence, {
-				usageTotals: this._getSessionUsageTotals(),
-			});
+			await saveConversationToMongo(this._conversationPersistence, {});
 		} catch (err) {
 			console.error("[MongoDB] Error persisting message:", err);
 		}
@@ -3466,17 +3459,6 @@ export class AgentSession {
 	 */
 	getTurnUsage(): UsageTotals {
 		return { ...this._turnUsage };
-	}
-
-	/** Cumulative usage over all assistant messages in session state. */
-	private _getSessionUsageTotals(): UsageTotals {
-		const totals = emptyUsageTotals();
-		for (const message of this.state.messages) {
-			if (message.role === "assistant") {
-				addUsageToTotals(totals, (message as AssistantMessage).usage);
-			}
-		}
-		return totals;
 	}
 
 	/**
