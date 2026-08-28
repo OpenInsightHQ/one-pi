@@ -245,8 +245,15 @@ export interface MessageDoc {
 	model?: string | null;
 	endpoint?: string;
 	parentMessageId?: string;
+	/** Token count of THIS message's own text only (not call usage, not cumulative). */
 	tokenCount?: number;
+	/** Legacy arp field: input tokens of the model call that produced this message. */
 	inputTokenCount?: number;
+	/** Per-model-call usage (assistant messages only). Kept strictly separate from tokenCount. */
+	inputTokens?: number;
+	outputTokens?: number;
+	cacheReadTokens?: number;
+	cacheWriteTokens?: number;
 	sender?: string;
 	text?: string;
 	streamLog?: string;
@@ -286,6 +293,11 @@ export interface ConversationDoc {
 	finish_reason?: string;
 	/** pi-specific: working directory for the session */
 	cwd?: string;
+	/** pi-specific: cumulative session usage totals for metering/display */
+	totalInputTokens?: number;
+	totalOutputTokens?: number;
+	totalCacheReadTokens?: number;
+	totalCacheWriteTokens?: number;
 	expiredAt?: Date | null;
 	createdAt?: Date;
 	updatedAt?: Date;

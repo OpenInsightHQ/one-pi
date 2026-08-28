@@ -22,6 +22,8 @@ import type {
 	ToolResultMessage,
 	UserMessage,
 } from "@mariozechner/pi-ai";
+import { estimateTokens } from "../compaction/compaction.js";
+import type { UsageTotals } from "../usage-aggregation.js";
 import { isMongoEnabled } from "./db.js";
 import { getConversationModel, getMessageModel } from "./models.js";
 
@@ -116,8 +118,15 @@ interface MessageDocData {
 	content?: ContentPart[];
 	finish_reason?: string;
 	error?: boolean;
+	/** Token count of this message's own text only — never call usage or cumulative totals. */
 	tokenCount?: number;
+	/** Legacy arp field: input tokens of the model call. */
 	inputTokenCount?: number;
+	/** Per-model-call usage (assistant messages). Strictly separate from tokenCount. */
+	inputTokens?: number;
+	outputTokens?: number;
+	cacheReadTokens?: number;
+	cacheWriteTokens?: number;
 	recursionLimit?: string;
 	metadata?: Record<string, unknown>;
 	createdAt?: Date;
@@ -155,6 +164,8 @@ function buildMessageDoc(
 		base.sender = "User";
 		base.isCreatedByUser = true;
 		base.text = extractText(userMsg.content);
+		// Own-size token count of this message's text (not call usage)
+		base.tokenCount = userMsg.tokenCount ?? estimateTokens(message);
 		// Machine-injected user messages are not typed by the human and would
 		// render as stray user bubbles / fork the visible tree. Hide them:
 		// - "/skill:" commands injected by arp's execute_skill tool
@@ -171,8 +182,15 @@ function buildMessageDoc(
 		base.finish_reason = mapStopReason(assistantMsg.stopReason);
 		base.error = assistantMsg.stopReason === "error";
 		base.model = assistantMsg.model || PI_MODEL;
+		// Own-size token count of this message's text/thinking/tool-call args
+		base.tokenCount = assistantMsg.tokenCount ?? estimateTokens(message);
 		if (assistantMsg.usage) {
-			base.tokenCount = assistantMsg.usage.output;
+			// Per-model-call usage — recorded separately, never folded into tokenCount
+			base.inputTokens = assistantMsg.usage.input;
+			base.outputTokens = assistantMsg.usage.output;
+			base.cacheReadTokens = assistantMsg.usage.cacheRead;
+			base.cacheWriteTokens = assistantMsg.usage.cacheWrite;
+			// Legacy arp-compatible field
 			base.inputTokenCount = assistantMsg.usage.input;
 		}
 		base.recursionLimit = `1/${PI_MAX_RECURSION}`;
@@ -182,6 +200,8 @@ function buildMessageDoc(
 		base.isCreatedByUser = false;
 		base.text = extractText(toolMsg.content);
 		base.model = PI_MODEL;
+		// Own-size token count of this message's content (not call usage)
+		base.tokenCount = toolMsg.tokenCount ?? estimateTokens(message);
 	}
 
 	// Whole-turn hiding (skillExecution mode): pi runs as a subagent of the
@@ -294,8 +314,15 @@ export async function mergeAssistantMessageInMongo(
 			error: message.stopReason === "error",
 		};
 
+		// Own-size token count of the merged text (not call usage, not cumulative)
+		update.tokenCount = Math.ceil(mergedText.length / 4);
 		if (message.usage) {
-			update.tokenCount = message.usage.output;
+			// Per-model-call usage of the latest call — separate fields, never tokenCount
+			update.inputTokens = message.usage.input;
+			update.outputTokens = message.usage.output;
+			update.cacheReadTokens = message.usage.cacheRead;
+			update.cacheWriteTokens = message.usage.cacheWrite;
+			// Legacy arp-compatible field
 			update.inputTokenCount = message.usage.input;
 		}
 
@@ -383,7 +410,7 @@ export async function updateToolCallOutputInMongo(
  */
 export async function saveConversationToMongo(
 	ctx: ConversationPersistenceContext,
-	options?: { title?: string; finishReason?: string },
+	options?: { title?: string; finishReason?: string; usageTotals?: UsageTotals },
 ): Promise<void> {
 	if (!isMongoEnabled()) return;
 
@@ -430,6 +457,13 @@ export async function saveConversationToMongo(
 		}
 		if (options?.finishReason !== undefined) {
 			update.finish_reason = options.finishReason;
+		}
+		// Cumulative session usage totals for metering/display
+		if (options?.usageTotals) {
+			update.totalInputTokens = options.usageTotals.totalInputTokens;
+			update.totalOutputTokens = options.usageTotals.totalOutputTokens;
+			update.totalCacheReadTokens = options.usageTotals.totalCacheReadTokens;
+			update.totalCacheWriteTokens = options.usageTotals.totalCacheWriteTokens;
 		}
 
 		await Conversation.findOneAndUpdate(

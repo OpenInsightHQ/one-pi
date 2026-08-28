@@ -43,6 +43,7 @@ import {
 	collectEntriesForBranchSummary,
 	compact,
 	estimateContextTokens,
+	estimateTokens,
 	generateBranchSummary,
 	prepareCompaction,
 	shouldCompact,
@@ -105,6 +106,7 @@ import type { BashOperations, BashToolOptions } from "./tools/bash.js";
 import { createAllToolDefinitions } from "./tools/index.js";
 import type { PathGuard } from "./tools/path-utils.js";
 import { createToolDefinitionFromAgentTool, wrapToolDefinition } from "./tools/tool-definition-wrapper.js";
+import { addUsageToTotals, emptyUsageTotals, type UsageTotals } from "./usage-aggregation.js";
 
 // ============================================================================
 // Skill Block Parsing
@@ -241,6 +243,8 @@ export interface SessionStats {
 		cacheWrite: number;
 		total: number;
 	};
+	/** Cumulative session usage totals (same values as `tokens`, exact-name aliases for metering) */
+	usage: UsageTotals;
 	cost: number;
 }
 
@@ -487,6 +491,17 @@ export class AgentSession {
 	// Track last assistant message for auto-compaction check
 	private _lastAssistantMessage: AssistantMessage | undefined = undefined;
 
+	/**
+	 * Cumulative usage for the current turn (since the last non-queued user
+	 * message). Each assistant message_end adds its model-call usage; a new
+	 * user-initiated turn resets it. Steering/follow-up messages injected
+	 * mid-run do NOT reset it. For metering/display only — never written into
+	 * message.tokenCount.
+	 */
+	private _turnUsage: UsageTotals = emptyUsageTotals();
+	/** Whether the user message currently flowing through events came from the steering/follow-up queue. */
+	private _currentUserMessageQueued = false;
+
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = (event: AgentEvent): void => {
 		// Create retry promise synchronously before queueing async processing.
@@ -541,17 +556,41 @@ export class AgentSession {
 		if (event.type === "message_start" && event.message.role === "user") {
 			this._overflowRecoveryAttempted = false;
 			const messageText = this._getUserMessageText(event.message);
+			this._currentUserMessageQueued = false;
 			if (messageText) {
 				// Check steering queue first
 				const steeringIndex = this._steeringMessages.indexOf(messageText);
 				if (steeringIndex !== -1) {
 					this._steeringMessages.splice(steeringIndex, 1);
+					this._currentUserMessageQueued = true;
 				} else {
 					// Check follow-up queue
 					const followUpIndex = this._followUpMessages.indexOf(messageText);
 					if (followUpIndex !== -1) {
 						this._followUpMessages.splice(followUpIndex, 1);
+						this._currentUserMessageQueued = true;
 					}
+				}
+			}
+		}
+
+		// Token accounting, before any consumer sees the finished message:
+		// - Record the message's own size (token count of THIS message's text
+		//   only — strictly separated from per-call usage and totals).
+		// - Update turn usage totals from the model call that produced an
+		//   assistant message, resetting them when a user-initiated turn starts.
+		if (event.type === "message_end") {
+			const message = event.message;
+			if (message.role === "user" || message.role === "assistant" || message.role === "toolResult") {
+				if (message.tokenCount === undefined) {
+					message.tokenCount = estimateTokens(message);
+				}
+				// Queued steering/follow-up messages continue the current turn.
+				if (message.role === "user" && !this._currentUserMessageQueued) {
+					this._turnUsage = emptyUsageTotals();
+				}
+				if (message.role === "assistant") {
+					addUsageToTotals(this._turnUsage, message.usage);
 				}
 			}
 		}
@@ -679,7 +718,9 @@ export class AgentSession {
 				const toolMsg = message as ToolResultMessage;
 				const outputText = this._extractToolResultText(toolMsg);
 				await updateToolCallOutputInMongo(this._conversationPersistence, toolMsg.toolCallId, outputText);
-				await saveConversationToMongo(this._conversationPersistence, {});
+				await saveConversationToMongo(this._conversationPersistence, {
+					usageTotals: this._getSessionUsageTotals(),
+				});
 				return;
 			}
 
@@ -708,7 +749,9 @@ export class AgentSession {
 					// point so the following assistant reply attaches there.
 					this._lastMongoMessageId = messageId;
 				}
-				const convoOptions: { title?: string; finishReason?: string } = {};
+				const convoOptions: { title?: string; finishReason?: string; usageTotals?: UsageTotals } = {
+					usageTotals: this._getSessionUsageTotals(),
+				};
 				if (wasNewConversation && !isHiddenInjection) {
 					convoOptions.title = deriveTitle(userText);
 				}
@@ -745,8 +788,9 @@ export class AgentSession {
 					}
 				}
 
-				const convoOptions: { finishReason?: string } = {
+				const convoOptions: { finishReason?: string; usageTotals?: UsageTotals } = {
 					finishReason: assistantMsg.stopReason,
+					usageTotals: this._getSessionUsageTotals(),
 				};
 				await saveConversationToMongo(this._conversationPersistence, convoOptions);
 				return;
@@ -763,7 +807,9 @@ export class AgentSession {
 			if (messageId) {
 				this._lastMongoMessageId = messageId;
 			}
-			await saveConversationToMongo(this._conversationPersistence, {});
+			await saveConversationToMongo(this._conversationPersistence, {
+				usageTotals: this._getSessionUsageTotals(),
+			});
 		} catch (err) {
 			console.error("[MongoDB] Error persisting message:", err);
 		}
@@ -3409,6 +3455,25 @@ export class AgentSession {
 	}
 
 	/**
+	 * Cumulative usage of the current (or most recently completed) turn:
+	 * all model calls since the last user-initiated message. Read-only copy.
+	 */
+	getTurnUsage(): UsageTotals {
+		return { ...this._turnUsage };
+	}
+
+	/** Cumulative usage over all assistant messages in session state. */
+	private _getSessionUsageTotals(): UsageTotals {
+		const totals = emptyUsageTotals();
+		for (const message of this.state.messages) {
+			if (message.role === "assistant") {
+				addUsageToTotals(totals, (message as AssistantMessage).usage);
+			}
+		}
+		return totals;
+	}
+
+	/**
 	 * Get session statistics.
 	 */
 	getSessionStats(): SessionStats {
@@ -3450,6 +3515,12 @@ export class AgentSession {
 				cacheRead: totalCacheRead,
 				cacheWrite: totalCacheWrite,
 				total: totalInput + totalOutput + totalCacheRead + totalCacheWrite,
+			},
+			usage: {
+				totalInputTokens: totalInput,
+				totalOutputTokens: totalOutput,
+				totalCacheReadTokens: totalCacheRead,
+				totalCacheWriteTokens: totalCacheWrite,
 			},
 			cost: totalCost,
 		};

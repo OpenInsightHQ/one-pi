@@ -502,6 +502,8 @@ async function handlePromptInternal(
 					sessionId,
 					cwd: session.sessionManager.getCwd(),
 					newSession: isNewSession,
+					// Turn usage: per-call breakdown plus total* cumulative counters
+					usage: collectedUsage,
 				});
 			}
 		}
@@ -646,7 +648,9 @@ export async function handleChatCompletions(req: IncomingMessage, res: ServerRes
 		function: { name: string; arguments: string };
 	}> = [];
 	let collectedFinishReason: string = "stop";
-	let collectedUsage: { input: number; output: number; totalTokens: number } | undefined;
+	let collectedUsage:
+		| { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number }
+		| undefined;
 	const toolCallIndexMap = new Map<string, number>();
 	let nextToolCallIndex = 0;
 
@@ -819,11 +823,16 @@ export async function handleChatCompletions(req: IncomingMessage, res: ServerRes
 								prompt_tokens: collectedUsage.input,
 								completion_tokens: collectedUsage.output,
 								total_tokens: collectedUsage.totalTokens,
+								// Per-call cache usage, recorded separately
+								cache_read_tokens: collectedUsage.cacheRead,
+								cache_write_tokens: collectedUsage.cacheWrite,
 							}
 						: {
 								prompt_tokens: 0,
 								completion_tokens: 0,
 								total_tokens: 0,
+								cache_read_tokens: 0,
+								cache_write_tokens: 0,
 							},
 				});
 			}

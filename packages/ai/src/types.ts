@@ -183,6 +183,9 @@ export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 export interface UserMessage {
 	role: "user";
 	content: string | (TextContent | ImageContent)[];
+	/** Estimated token count of THIS message's own content only. Not the model-call
+	 *  usage (see AssistantMessage.usage) and not a cumulative counter. */
+	tokenCount?: number;
 	timestamp: number; // Unix timestamp in milliseconds
 }
 
@@ -193,6 +196,10 @@ export interface AssistantMessage {
 	provider: Provider;
 	model: string;
 	responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
+	/** Estimated token count of THIS message's own content only (text/thinking/tool-call args).
+	 *  Distinct from `usage`, which describes the actual model call that produced this message,
+	 *  and never a cumulative counter. */
+	tokenCount?: number;
 	usage: Usage;
 	stopReason: StopReason;
 	errorMessage?: string;
@@ -204,6 +211,9 @@ export interface ToolResultMessage<TDetails = any> {
 	toolCallId: string;
 	toolName: string;
 	content: (TextContent | ImageContent)[]; // Supports text and images
+	/** Estimated token count of THIS message's own content only. Not the model-call
+	 *  usage and not a cumulative counter. */
+	tokenCount?: number;
 	details?: TDetails;
 	isError: boolean;
 	timestamp: number; // Unix timestamp in milliseconds

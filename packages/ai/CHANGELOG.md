@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Optional `tokenCount` field on `UserMessage`, `AssistantMessage`, and `ToolResultMessage`: the estimated token count of that single message's own content (text/thinking/tool-call arguments), populated by consumers such as the coding agent. Strictly separate from `AssistantMessage.usage` (per-model-call usage) and from cumulative turn/session totals.
+
 ### Changed
 
 - Moved `canvas` from `devDependencies` to `optionalDependencies` so `npm install` no longer fails when `canvas` cannot fetch a prebuilt native binary and the host lacks Visual Studio C++ build tools. `canvas` is only used by the one-off `scripts/generate-test-image.ts`, whose output (`test/data/red-circle.png`) is already committed.
