@@ -333,17 +333,12 @@ export async function mergeAssistantMessageInMongo(
 		};
 
 		// arp-compatible tokenCount: cumulative output of the turn so far.
-		// inputTokenCount is intentionally NOT updated: it keeps the first
-		// call's full prompt, matching arp's firstUsage-based semantics.
+		// The per-call quartet (inputTokens/outputTokens/cacheReadTokens/
+		// cacheWriteTokens) and inputTokenCount are intentionally NOT updated:
+		// they keep the turn's FIRST call values, pairing with inputTokenCount
+		// (arp's firstUsage base) so In ≥ cache-hit always holds in display.
 		if (turnUsageTotals) {
 			update.tokenCount = turnUsageTotals.totalOutputTokens;
-		}
-		if (message.usage) {
-			// Per-model-call usage of the latest call — separate fields, never tokenCount
-			update.inputTokens = message.usage.input;
-			update.outputTokens = message.usage.output;
-			update.cacheReadTokens = message.usage.cacheRead;
-			update.cacheWriteTokens = message.usage.cacheWrite;
 		}
 		// Turn-cumulative totals (all model calls of this turn so far)
 		if (turnUsageTotals) {
