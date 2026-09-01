@@ -38,6 +38,18 @@ export {
 	getEffectivePermissions,
 	resolveUserPrincipals,
 } from "./acl.js";
+// Two-stage skill catalog service
+export {
+	buildSkillCatalogSuffix,
+	extractMcpConnection,
+	findHttpSkillEntry,
+	findMcpServerEntry,
+	findRepoSkillEntry,
+	formatHttpSkillsPrompt,
+	formatMcpSkillsPrompt,
+	type HttpSkillCatalogEntry,
+	type McpSkillCatalogEntry,
+} from "./catalog-service.js";
 // Conversation & message persistence service
 export {
 	type ConversationPersistenceContext,

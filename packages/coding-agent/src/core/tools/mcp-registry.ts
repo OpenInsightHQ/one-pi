@@ -320,7 +320,7 @@ export function unregisterMCPTools(serverUrl: string): boolean {
 /**
  * 调用 MCP 工具
  */
-async function callMCPTool(config: MCPToolConfig, params: Record<string, unknown>): Promise<unknown> {
+export async function callMCPTool(config: MCPToolConfig, params: Record<string, unknown>): Promise<unknown> {
 	const mcpHeaders: Record<string, string> = {
 		"Content-Type": "application/json",
 		Accept: "application/json, text/event-stream",
@@ -401,6 +401,101 @@ function mapJSONSchemaType(type: string | undefined): "string" | "number" | "boo
 	if (type === "number" || type === "integer") return "number";
 	if (type === "boolean") return "boolean";
 	return "string";
+}
+
+/**
+ * Read-only `tools/list` probe for per-user MCP servers (catalog path).
+ *
+ * Unlike {@link discoverAndRegisterMCPTools} this never writes the global
+ * file-based registry: it connects with the given headers, lists the tools,
+ * and returns their configs for the caller (skill_describe / skill_execute).
+ */
+export async function probeMcpServerTools(
+	serverUrl: string,
+	serverName: string,
+	headers?: Record<string, string>,
+): Promise<{ tools: MCPToolConfig[]; error?: string }> {
+	const mcpHeaders = {
+		"Content-Type": "application/json",
+		Accept: "application/json, text/event-stream",
+		...(headers || {}),
+	};
+
+	let sessionHeaders: Record<string, string>;
+	try {
+		sessionHeaders = await mcpInitializeSession(serverUrl, mcpHeaders, `probeMcpServerTools ${serverUrl}`);
+	} catch (error) {
+		const msg = formatMcpError(error);
+		return { tools: [], error: `MCP connection failed: ${msg}` };
+	}
+
+	let listResponse: Response;
+	try {
+		listResponse = await mcpFetch(
+			serverUrl,
+			{
+				method: "POST",
+				headers: sessionHeaders,
+				body: JSON.stringify({
+					jsonrpc: "2.0",
+					id: 2,
+					method: "tools/list",
+					params: {},
+				}),
+			},
+			`probeMcpServerTools ${serverUrl} (tools/list)`,
+		);
+	} catch (error) {
+		const msg = formatMcpError(error);
+		return { tools: [], error: `MCP tools/list failed: ${msg}` };
+	}
+
+	if (!listResponse.ok) {
+		return { tools: [], error: `MCP list tools failed: ${listResponse.status}` };
+	}
+
+	const listData = await parseMcpResponse<{
+		error?: { message: string };
+		result?: {
+			tools: Array<{
+				name: string;
+				description?: string;
+				inputSchema?: {
+					type: string;
+					properties?: Record<string, any>;
+					required?: string[];
+				};
+			}>;
+		};
+	}>(listResponse);
+
+	if (listData.error) {
+		return { tools: [], error: `MCP error: ${listData.error.message}` };
+	}
+
+	const tools: MCPToolConfig[] = (listData.result?.tools || []).map((tool) => {
+		const params: Record<string, MCPParamConfig> = {};
+		if (tool.inputSchema?.properties) {
+			for (const [key, schema] of Object.entries(tool.inputSchema.properties)) {
+				const s = schema as any;
+				params[key] = {
+					type: mapJSONSchemaType(s.type),
+					description: s.description || "",
+					required: tool.inputSchema.required?.includes(key) || false,
+				};
+			}
+		}
+		return {
+			serverUrl,
+			serverName,
+			toolName: tool.name,
+			toolDescription: tool.description || `${tool.name} from ${serverName}`,
+			parameters: params,
+			headers,
+		};
+	});
+
+	return { tools };
 }
 
 // ========== 运行时工具缓存 ==========

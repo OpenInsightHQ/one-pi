@@ -85,6 +85,8 @@ export interface SkillDoc {
 	credentialSchema?: CredentialSchemaField[];
 	/** http skills: API definitions stored inline (former apis.json content) for pi direct-read */
 	apiDefinitions?: Array<Record<string, unknown>>;
+	/** How resolved credential values are injected (http skills: request headers) */
+	credentialBinding?: CredentialBinding;
 	/** Origin of the skill record (e.g. `skill-creator` for synced personal skills) */
 	source?: string;
 	createdAt?: Date;
@@ -389,13 +391,16 @@ export interface CredentialSchemaField {
 	description?: string;
 }
 
-/** How resolved credential values are mapped into an MCP connection (mcpservers docs). */
-export interface McpCredentialBinding {
+/** How resolved credential values are mapped into outbound requests (skills) or MCP connections. */
+export interface CredentialBinding {
 	/** secretKey → HTTP header name, e.g. `{ app_secret: "X-App-Secret" }` */
 	headerMap?: Record<string, string>;
 	/** `bearer` = first sensitive field becomes `Authorization: Bearer <value>` */
 	authType?: "headers" | "bearer";
 }
+
+/** Backwards-compatible alias: credential binding on `mcpservers` documents. */
+export type McpCredentialBinding = CredentialBinding;
 
 export interface SkillCredentialDoc {
 	_id: import("mongoose").Types.ObjectId;

@@ -25,12 +25,14 @@ import {
 	sendJson,
 	sendSSE,
 } from "./http-api-shared.js";
+import { buildSkillCatalogSuffix } from "./mongo/catalog-service.js";
 import { createTaskInMongo, findTasksByConversation, updateTaskStatusInMongo } from "./mongo/task-queue-service.js";
 import { type CreateAgentSessionOptions, createAgentSession } from "./sdk.js";
 import { findMostRecentSession, SessionManager } from "./session-manager.js";
 import { createLibreChatTools } from "./tools/document-generator.js";
 import { getCachedMCPTools } from "./tools/mcp-registry.js";
 import { createMemoryAgentTools } from "./tools/memory-tools.js";
+import { createSkillDispatchTools } from "./tools/skill-dispatch-tools.js";
 import { type AggregatedUsage, aggregateUsage, firstCallUsageView, type PiUsage } from "./usage-aggregation.js";
 
 interface PromptRequestBody {
@@ -206,7 +208,14 @@ async function handlePromptInternal(
 			if (memoryTools.length > 0) {
 				console.log(`[HTTP] /prompt: added ${memoryTools.length} memory tool(s) for user ${userId}`);
 			}
-			const allTools = [...libreChatTools, ...getCachedMCPTools(), ...getHttpSkillAgentTools(), ...memoryTools];
+			const skillDispatchTools = createSkillDispatchTools(userId, agentId);
+			const allTools = [
+				...libreChatTools,
+				...getCachedMCPTools(),
+				...getHttpSkillAgentTools(),
+				...memoryTools,
+				...skillDispatchTools,
+			];
 
 			const sessionDir = join(getUserSessionDir(userId, agentId, sessionId), ".pi", "sessions");
 
@@ -400,7 +409,12 @@ async function handlePromptInternal(
 	// agent, isolated from the user's personal prompt/memory context.
 	const userContextSuffix = body.skillExecution === true ? "" : await buildUserContextSuffix(userId);
 
-	const dmpSystemSuffix = `${userContextSuffix}${userContextSuffix ? "\n" : ""}\n[DMP Context]\nX-User-Id: ${userId}\nX-Agent-Id: ${agentId}\nX-Conversation-Id: ${sessionId}\nWhen calling any dmp- skill script via python, always pass these as CLI arguments: --X-User-Id "${userId}" --X-Agent-Id "${agentId}" --X-Conversation-Id "${sessionId}"`;
+	// Two-stage skill catalog (<available_http_skills> / <available_mcp_skills>),
+	// also fetched fresh each turn; hidden in skill-execution mode like the
+	// repo-skill catalog.
+	const skillCatalogSuffix = body.skillExecution === true ? "" : await buildSkillCatalogSuffix(userId, agentId);
+
+	const dmpSystemSuffix = `${userContextSuffix}${userContextSuffix ? "\n" : ""}${skillCatalogSuffix}${skillCatalogSuffix ? "\n" : ""}\n[DMP Context]\nX-User-Id: ${userId}\nX-Agent-Id: ${agentId}\nX-Conversation-Id: ${sessionId}\nWhen calling any dmp- skill script via python, always pass these as CLI arguments: --X-User-Id "${userId}" --X-Agent-Id "${agentId}" --X-Conversation-Id "${sessionId}"`;
 
 	session.setMessageIds(body.userMessageId, body.responseMessageId, body.parentMessageId);
 
@@ -601,7 +615,14 @@ export async function handleChatCompletions(req: IncomingMessage, res: ServerRes
 			if (memoryTools.length > 0) {
 				console.log(`[HTTP] /v1/chat/completions: added ${memoryTools.length} memory tool(s) for user ${userId}`);
 			}
-			const allTools = [...libreChatTools, ...getCachedMCPTools(), ...getHttpSkillAgentTools(), ...memoryTools];
+			const skillDispatchTools = createSkillDispatchTools(userId, agentId);
+			const allTools = [
+				...libreChatTools,
+				...getCachedMCPTools(),
+				...getHttpSkillAgentTools(),
+				...memoryTools,
+				...skillDispatchTools,
+			];
 			const sessionDir = join(getUserSessionDir(userId, agentId, sessionId), ".pi", "sessions");
 			const existingSessionFile = findMostRecentSession(sessionDir);
 			let sessionManager: SessionManager;
@@ -777,7 +798,8 @@ export async function handleChatCompletions(req: IncomingMessage, res: ServerRes
 
 	// Per-user context (available prompts + long-term memory), see /prompt.
 	const chatUserContextSuffix = await buildUserContextSuffix(userId);
-	const chatDmpSuffix = `${chatUserContextSuffix}${chatUserContextSuffix ? "\n" : ""}\n[DMP Context]\nX-User-Id: ${userId}\nX-Agent-Id: ${agentId}\nX-Conversation-Id: ${sessionId}\nWhen calling any dmp- skill script via python, always pass these as CLI arguments: --X-User-Id "${userId}" --X-Agent-Id "${agentId}" --X-Conversation-Id "${sessionId}"`;
+	const chatSkillCatalogSuffix = await buildSkillCatalogSuffix(userId, agentId);
+	const chatDmpSuffix = `${chatUserContextSuffix}${chatUserContextSuffix ? "\n" : ""}${chatSkillCatalogSuffix}${chatSkillCatalogSuffix ? "\n" : ""}\n[DMP Context]\nX-User-Id: ${userId}\nX-Agent-Id: ${agentId}\nX-Conversation-Id: ${sessionId}\nWhen calling any dmp- skill script via python, always pass these as CLI arguments: --X-User-Id "${userId}" --X-Agent-Id "${agentId}" --X-Conversation-Id "${sessionId}"`;
 
 	try {
 		await session.prompt(userMessage, {

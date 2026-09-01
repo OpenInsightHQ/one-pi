@@ -27,6 +27,11 @@ export interface AuthorizedSkill {
 	savePath: string;
 	skillType?: string;
 	status?: number;
+	/** http skills: inline API definitions (pi direct-read, no savePath install) */
+	apiDefinitions?: Array<Record<string, unknown>>;
+	requiresCredentials?: boolean;
+	userManaged?: boolean;
+	credentialBinding?: import("./types.js").CredentialBinding;
 }
 
 // ---------------------------------------------------------------------------
@@ -34,12 +39,16 @@ export interface AuthorizedSkill {
 // ---------------------------------------------------------------------------
 
 /**
- * Converts a raw MongoDB skill document to the {@link AuthorizedSkill} shape,
- * skipping entries whose `savePath` doesn't exist on disk.
+ * Converts a raw MongoDB skill document to the {@link AuthorizedSkill} shape.
+ *
+ * Repo-type skills require an existing `savePath` on disk. http-type skills
+ * don't need one — their `apiDefinitions` live inline in the document, so pi
+ * reads them directly without any install step.
  */
 function toAuthorizedSkill(doc: SkillDoc): AuthorizedSkill | null {
+	const isHttpType = doc.skillType === "http";
 	const savePath = doc.savePath;
-	if (!savePath || !existsSync(savePath)) {
+	if (!isHttpType && (!savePath || !existsSync(savePath))) {
 		return null;
 	}
 	return {
@@ -48,9 +57,13 @@ function toAuthorizedSkill(doc: SkillDoc): AuthorizedSkill | null {
 		displayName: doc.displayName,
 		description: doc.description,
 		category: doc.category,
-		savePath,
+		savePath: savePath ?? "",
 		skillType: doc.skillType,
 		status: doc.status,
+		apiDefinitions: doc.apiDefinitions,
+		requiresCredentials: doc.requiresCredentials,
+		userManaged: doc.userManaged,
+		credentialBinding: doc.credentialBinding,
 	};
 }
 
@@ -70,7 +83,7 @@ export async function getAuthorizedSkillDirs(userId: string): Promise<string[]> 
 	if (!isMongoEnabled()) return [];
 
 	const skills = await getAuthorizedSkills(userId);
-	return skills.map((s) => s.savePath);
+	return skills.filter((s) => s.savePath).map((s) => s.savePath);
 }
 
 /**
@@ -208,7 +221,7 @@ export async function getAgentSkillDirs(agentId: string): Promise<string[]> {
 	const dirs = new Set<string>();
 	for (const doc of docs) {
 		const skill = toAuthorizedSkill(doc);
-		if (skill) dirs.add(skill.savePath);
+		if (skill?.savePath) dirs.add(skill.savePath);
 	}
 	return [...dirs];
 }

@@ -45,6 +45,7 @@ import { SessionManager } from "./session-manager.js";
 import { createLibreChatTools } from "./tools/document-generator.js";
 import { getCachedMCPTools } from "./tools/mcp-registry.js";
 import { createMemoryAgentTools } from "./tools/memory-tools.js";
+import { createSkillDispatchTools } from "./tools/skill-dispatch-tools.js";
 
 export async function handleUpload(req: IncomingMessage, res: ServerResponse): Promise<void> {
 	const userId = getUserIdOrReject(req, res);
@@ -112,7 +113,14 @@ export async function handleUpload(req: IncomingMessage, res: ServerResponse): P
 			const cwd = getUserSessionDir(userId, agentId, sessionId);
 			const libreChatTools = createLibreChatTools(cwd);
 			const memoryTools = await createMemoryAgentTools(userId);
-			const allTools = [...libreChatTools, ...getCachedMCPTools(), ...getHttpSkillAgentTools(), ...memoryTools];
+			const skillDispatchTools = createSkillDispatchTools(userId, agentId);
+			const allTools = [
+				...libreChatTools,
+				...getCachedMCPTools(),
+				...getHttpSkillAgentTools(),
+				...memoryTools,
+				...skillDispatchTools,
+			];
 			const sessionDir = join(cwd, ".pi", "sessions");
 			const sessionManager = SessionManager.create(cwd, sessionDir);
 			const resourceLoader = await createHttpResourceLoader(userId, cwd, agentId);
