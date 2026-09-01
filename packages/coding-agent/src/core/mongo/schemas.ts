@@ -4,9 +4,11 @@ import type {
 	AclEntryDoc,
 	AgentDoc,
 	ConversationDoc,
+	McpServerDoc,
 	MemoryEntryDoc,
 	MessageDoc,
 	RoleDoc,
+	SkillCredentialDoc,
 	SkillDoc,
 	SystemPromptDoc,
 	TaskQueueDoc,
@@ -41,10 +43,60 @@ export const skillSchema = new Schema<SkillDoc>(
 		creatorUserId: { type: Number },
 		tenantId: { type: Number },
 		status: { type: Number, default: 1 },
+		requiresCredentials: { type: Boolean },
+		userManaged: { type: Boolean },
+		credentialSchema: { type: [Schema.Types.Mixed], default: undefined },
+		apiDefinitions: { type: [Schema.Types.Mixed], default: undefined },
+		source: { type: String },
 		_class: { type: String },
 	},
 	{ strict: false, timestamps: true, collection: "skills" },
 );
+
+// ---------------------------------------------------------------------------
+// mcpservers (shared with arp/LibreChat; credential fields written by dmp/arp)
+// ---------------------------------------------------------------------------
+
+export const mcpServerSchema = new Schema<McpServerDoc>(
+	{
+		serverName: { type: String, required: true },
+		config: { type: Schema.Types.Mixed },
+		author: { type: Schema.Types.ObjectId },
+		isPiSkill: { type: Boolean },
+		requiresCredentials: { type: Boolean },
+		userManaged: { type: Boolean },
+		credentialSchema: { type: [Schema.Types.Mixed], default: undefined },
+		credentialBinding: { type: Schema.Types.Mixed, default: undefined },
+		_class: { type: String },
+	},
+	// Collection is owned by arp/LibreChat; strict:false preserves arp-written
+	// fields (user vars, trusted, tools cache, ...).
+	{ strict: false, timestamps: true, collection: "mcpservers" },
+);
+mcpServerSchema.index({ serverName: 1 });
+
+// ---------------------------------------------------------------------------
+// skillcredentials (AES-256-GCM encrypted skill/MCP credentials)
+// ---------------------------------------------------------------------------
+
+export const skillCredentialSchema = new Schema<SkillCredentialDoc>(
+	{
+		userId: { type: Schema.Types.ObjectId, required: true },
+		resourceType: { type: String, required: true, enum: ["skill", "mcp"] },
+		resourceName: { type: String, required: true },
+		cipher: { type: String, default: "aes-256-gcm" },
+		iv: { type: String, required: true },
+		authTag: { type: String, required: true },
+		data: { type: String, required: true },
+		keyVersion: { type: Number, default: 1 },
+		lastVerifiedAt: { type: Date, default: null },
+		status: { type: String, default: "active" },
+		_class: { type: String },
+	},
+	{ strict: false, timestamps: true, collection: "skillcredentials" },
+);
+// One credential document per (principal, resource).
+skillCredentialSchema.index({ userId: 1, resourceType: 1, resourceName: 1 }, { unique: true });
 
 // ---------------------------------------------------------------------------
 // accessroles

@@ -4,9 +4,11 @@ import {
 	aclEntrySchema,
 	agentSchema,
 	conversationSchema,
+	mcpServerSchema,
 	memoryEntrySchema,
 	messageSchema,
 	roleSchema,
+	skillCredentialSchema,
 	skillSchema,
 	systemPromptSchema,
 	taskQueueSchema,
@@ -18,9 +20,11 @@ import type {
 	AclEntryDoc,
 	AgentDoc,
 	ConversationDoc,
+	McpServerDoc,
 	MemoryEntryDoc,
 	MessageDoc,
 	RoleDoc,
+	SkillCredentialDoc,
 	SkillDoc,
 	SystemPromptDoc,
 	TaskQueueDoc,
@@ -107,6 +111,18 @@ export type MemoryEntryModel = mongoose.Model<MemoryEntryDoc>;
 
 export function getMemoryEntryModel(): MemoryEntryModel {
 	return mongoose.model<MemoryEntryDoc>("MemoryEntry", memoryEntrySchema, "memoryentries");
+}
+
+export type McpServerModel = mongoose.Model<McpServerDoc>;
+
+export function getMcpServerModel(): McpServerModel {
+	return mongoose.model<McpServerDoc>("McpServer", mcpServerSchema, "mcpservers");
+}
+
+export type SkillCredentialModel = mongoose.Model<SkillCredentialDoc>;
+
+export function getSkillCredentialModel(): SkillCredentialModel {
+	return mongoose.model<SkillCredentialDoc>("SkillCredential", skillCredentialSchema, "skillcredentials");
 }
 
 /**

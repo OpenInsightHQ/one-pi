@@ -77,6 +77,16 @@ export interface SkillDoc {
 	creatorUserId?: number;
 	tenantId?: number;
 	status?: number;
+	/** true = this skill requires bound credentials before execution */
+	requiresCredentials?: boolean;
+	/** true = users bind their own credentials (fallback: admin binding); false = admin-managed only */
+	userManaged?: boolean;
+	/** Declares which secret fields this skill needs (values live in `skillcredentials`) */
+	credentialSchema?: CredentialSchemaField[];
+	/** http skills: API definitions stored inline (former apis.json content) for pi direct-read */
+	apiDefinitions?: Array<Record<string, unknown>>;
+	/** Origin of the skill record (e.g. `skill-creator` for synced personal skills) */
+	source?: string;
 	createdAt?: Date;
 	updatedAt?: Date;
 	_class?: string;
@@ -353,4 +363,81 @@ export interface TaskQueueDoc {
 export interface Principal {
 	principalType: PrincipalType;
 	principalId?: import("mongoose").Types.ObjectId;
+}
+
+// ---------------------------------------------------------------------------
+// Skill credential contract (skillcredentials collection)
+// ---------------------------------------------------------------------------
+
+export type CredentialResourceType = "skill" | "mcp";
+export type CredentialStatus = "active" | "invalid";
+
+/**
+ * Sentinel ObjectId (all zeros) used as `userId` on credentials bound by the
+ * dmp administrator ("admin-managed" credentials shared across users).
+ */
+export const ADMIN_CREDENTIAL_USER_ID = "000000000000000000000000";
+
+/** One declared secret field of a skill/MCP server (declaration only, never the value). */
+export interface CredentialSchemaField {
+	/** Key inside the encrypted credential JSON, e.g. `app_secret` */
+	secretKey: string;
+	/** UI label, e.g. `App Secret` */
+	displayName?: string;
+	/** true = render as password input everywhere */
+	sensitive?: boolean;
+	description?: string;
+}
+
+/** How resolved credential values are mapped into an MCP connection (mcpservers docs). */
+export interface McpCredentialBinding {
+	/** secretKey → HTTP header name, e.g. `{ app_secret: "X-App-Secret" }` */
+	headerMap?: Record<string, string>;
+	/** `bearer` = first sensitive field becomes `Authorization: Bearer <value>` */
+	authType?: "headers" | "bearer";
+}
+
+export interface SkillCredentialDoc {
+	_id: import("mongoose").Types.ObjectId;
+	/** Owning user; ADMIN_CREDENTIAL_USER_ID for admin-managed credentials */
+	userId: import("mongoose").Types.ObjectId;
+	resourceType: CredentialResourceType;
+	/** skill.name or mcpservers.serverName */
+	resourceName: string;
+	cipher: string;
+	/** base64 IV */
+	iv: string;
+	/** base64 GCM auth tag */
+	authTag: string;
+	/** base64 ciphertext of the JSON `{ secretKey: value }` object */
+	data: string;
+	/** Master-key version for rotation support */
+	keyVersion?: number;
+	lastVerifiedAt?: Date | null;
+	status?: CredentialStatus;
+	createdAt?: Date;
+	updatedAt?: Date;
+	_class?: string;
+}
+
+// ---------------------------------------------------------------------------
+// McpServer document (mcpservers collection, written by arp/dmp)
+// ---------------------------------------------------------------------------
+
+export interface McpServerDoc {
+	_id: import("mongoose").Types.ObjectId;
+	serverName: string;
+	/** LibreChat/arp MCP config blob (url, transport, headers, customUserVars, ...) */
+	config?: Record<string, unknown>;
+	author?: import("mongoose").Types.ObjectId;
+	/** true = registered as a pi skill source */
+	isPiSkill?: boolean;
+	requiresCredentials?: boolean;
+	userManaged?: boolean;
+	credentialSchema?: CredentialSchemaField[];
+	credentialBinding?: McpCredentialBinding;
+	createdAt?: Date;
+	updatedAt?: Date;
+	__v?: number;
+	_class?: string;
 }
