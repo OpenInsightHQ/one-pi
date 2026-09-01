@@ -47,7 +47,11 @@ export {
 	findRepoSkillEntry,
 	formatHttpSkillsPrompt,
 	formatMcpSkillsPrompt,
+	type HttpCatalogItem,
 	type HttpSkillCatalogEntry,
+	listHttpCatalogEntries,
+	listMcpCatalogEntries,
+	type McpCatalogItem,
 	type McpSkillCatalogEntry,
 } from "./catalog-service.js";
 // Conversation & message persistence service
@@ -125,6 +129,8 @@ export {
 	type UserModel,
 	type UserRoleModel,
 } from "./models.js";
+// Personal skill sync (skill-creator output → skills collection)
+export { type PersonalSkillSyncResult, registerPersonalSkill, syncPersonalSkills } from "./personal-skill-sync.js";
 // System-prompt catalog service
 export {
 	type AvailablePrompt,

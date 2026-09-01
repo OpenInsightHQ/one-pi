@@ -48,9 +48,11 @@ import {
 	handleMySkillDownload,
 	handleMySkills,
 	handleMySkillUpload,
+	handleSkillCatalog,
 	handleSkillDetail,
 	handleSkillDownload,
 	handleSkillExecute,
+	handleSkillRegisterPersonal,
 	handleSkills,
 	handleSkillsAuthorize,
 	handleSkillsDelete,
@@ -58,6 +60,7 @@ import {
 	handleSkillsFromHttpApis,
 	handleSkillsFromMcp,
 	handleSkillsRegisterMcp,
+	handleSkillsSync,
 	handleSkillsUpload,
 } from "./http-api-skill.js";
 import { connectMongo, ensureMessageIndexes } from "./mongo/index.js";
@@ -259,6 +262,21 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
 	if (pathname === "/skills/register-mcp") {
 		await handleSkillsRegisterMcp(req, res);
+		return;
+	}
+
+	if (pathname === "/skills/sync" && req.method === "POST") {
+		await handleSkillsSync(req, res);
+		return;
+	}
+
+	if (pathname === "/skills/register-personal" && req.method === "POST") {
+		await handleSkillRegisterPersonal(req, res);
+		return;
+	}
+
+	if (pathname === "/skills/catalog" && req.method === "GET") {
+		await handleSkillCatalog(req, res);
 		return;
 	}
 

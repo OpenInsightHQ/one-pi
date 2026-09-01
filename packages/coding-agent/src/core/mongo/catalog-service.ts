@@ -268,3 +268,53 @@ export async function findMcpServerEntry(userId: string, serverName: string): Pr
 	const entries = await getMcpSkillEntries(userId);
 	return entries.find((e) => e.name === serverName) ?? null;
 }
+
+// ---------------------------------------------------------------------------
+// Machine-readable catalog items (public /skills/catalog endpoint)
+// ---------------------------------------------------------------------------
+
+export interface HttpCatalogItem {
+	name: string;
+	description?: string;
+	apiCount: number;
+	requiresCredentials: boolean;
+	credentialConfigured: boolean;
+}
+
+export interface McpCatalogItem {
+	name: string;
+	description?: string;
+	toolCount?: number;
+	requiresCredentials: boolean;
+	credentialConfigured: boolean;
+}
+
+function toHttpItem(entry: HttpSkillCatalogEntry): HttpCatalogItem {
+	return {
+		name: entry.name,
+		description: entry.description,
+		apiCount: entry.apiCount,
+		requiresCredentials: entry.requiresCredentials,
+		credentialConfigured: entry.credentialConfigured,
+	};
+}
+
+function toMcpItem(entry: McpSkillCatalogEntry): McpCatalogItem {
+	return {
+		name: entry.name,
+		description: entry.description,
+		toolCount: entry.toolCount,
+		requiresCredentials: entry.requiresCredentials,
+		credentialConfigured: entry.credentialConfigured,
+	};
+}
+
+export async function listHttpCatalogEntries(userId: string, agentId?: string | null): Promise<HttpCatalogItem[]> {
+	const entries = await getHttpSkillEntries(userId, agentId);
+	return entries.map(toHttpItem);
+}
+
+export async function listMcpCatalogEntries(userId: string): Promise<McpCatalogItem[]> {
+	const entries = await getMcpSkillEntries(userId);
+	return entries.map(toMcpItem);
+}

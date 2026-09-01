@@ -32,6 +32,8 @@ import {
 	sendError,
 	sendJson,
 } from "./http-api-shared.js";
+import { buildSkillCatalogSuffix, listHttpCatalogEntries, listMcpCatalogEntries } from "./mongo/catalog-service.js";
+import { registerPersonalSkill, syncPersonalSkills } from "./mongo/personal-skill-sync.js";
 import { loadSkills, type SkillFrontmatter } from "./skills.js";
 import { discoverAndRegisterMCPTools, loadMCPRegistry, unregisterMCPTools } from "./tools/mcp-registry.js";
 
@@ -2893,6 +2895,60 @@ export async function handleSkillsRegisterMcp(req: IncomingMessage, res: ServerR
 		});
 		return;
 	}
+}
+
+/**
+ * POST /skills/sync — sync the user's personal skills directory into the
+ * `skills` collection (skill-creator output, uploads). Throttled per user
+ * (60s) unless `force: true` in the body.
+ */
+export async function handleSkillsSync(req: IncomingMessage, res: ServerResponse): Promise<void> {
+	const body = await parseJsonBody<{ userId?: string; force?: boolean }>(req);
+	const urlObj = new URL(req.url ?? "/", `http://${req.headers.host}`);
+	const userId = body?.userId ?? urlObj.searchParams.get("userId") ?? getUserId(req);
+	if (!userId) {
+		sendError(res, 400, "userId is required (X-User-Id header, query, or body)");
+		return;
+	}
+	const result = await syncPersonalSkills(userId, { force: body?.force === true });
+	sendJson(res, 200, { success: true, ...result });
+}
+
+/**
+ * POST /skills/register-personal — best-effort registration of ONE personal
+ * skill by name (called from the skill-creator instructions after creation).
+ */
+export async function handleSkillRegisterPersonal(req: IncomingMessage, res: ServerResponse): Promise<void> {
+	const body = await parseJsonBody<{ userId?: string; skillName?: string }>(req);
+	const userId = body?.userId ?? getUserId(req);
+	if (!userId || !body?.skillName) {
+		sendError(res, 400, "userId and skillName are required");
+		return;
+	}
+	const registered = await registerPersonalSkill(userId, body.skillName);
+	sendJson(res, 200, { success: registered, registered });
+}
+
+/**
+ * GET /skills/catalog — rendered catalog (source of truth for outer agents).
+ * Returns the prompt blocks plus machine-readable entries so arp can compose
+ * its outer agent prompt without duplicating pi's catalog logic.
+ */
+export async function handleSkillCatalog(req: IncomingMessage, res: ServerResponse): Promise<void> {
+	const urlObj = new URL(req.url ?? "/", `http://${req.headers.host}`);
+	const userId = urlObj.searchParams.get("userId") ?? getUserId(req);
+	if (!userId) {
+		sendError(res, 400, "userId is required (X-User-Id header or query)");
+		return;
+	}
+	const agentId = urlObj.searchParams.get("agentId");
+
+	const prompt = await buildSkillCatalogSuffix(userId, agentId);
+	const [httpSkills, mcpServers] = await Promise.all([
+		listHttpCatalogEntries(userId, agentId),
+		listMcpCatalogEntries(userId),
+	]);
+	sendJson(res, 200, { prompt, httpSkills, mcpServers });
 }
 
 export async function handleSkills(req: IncomingMessage, res: ServerResponse): Promise<void> {

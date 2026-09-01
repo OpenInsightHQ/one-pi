@@ -25,7 +25,7 @@ import {
 	sendJson,
 	sendSSE,
 } from "./http-api-shared.js";
-import { buildSkillCatalogSuffix } from "./mongo/catalog-service.js";
+import { buildSkillCatalogSuffix, findHttpSkillEntry, findMcpServerEntry } from "./mongo/catalog-service.js";
 import { createTaskInMongo, findTasksByConversation, updateTaskStatusInMongo } from "./mongo/task-queue-service.js";
 import { type CreateAgentSessionOptions, createAgentSession } from "./sdk.js";
 import { findMostRecentSession, SessionManager } from "./session-manager.js";
@@ -95,8 +95,29 @@ export async function handleExecuteAgentSkill(req: IncomingMessage, res: ServerR
 		return;
 	}
 
+	// Routing (§5.7): http/mcp-type skills have no /skill: command expansion —
+	// they run through the unified skill_execute executor instead. The turn
+	// stays in skill-execution mode (catalog hidden, hidden from the tree);
+	// the instruction names the skill explicitly, so hiding the catalog is
+	// harmless.
+	let message: string;
+	const httpEntry = await findHttpSkillEntry(userId, body.agentId, body.skillName);
+	const mcpEntry = httpEntry ? null : await findMcpServerEntry(userId, body.skillName);
+	if (httpEntry || mcpEntry) {
+		const kind = httpEntry ? "http" : "mcp";
+		message =
+			`[skill execution] Fulfill the request below with the skill_execute tool: ` +
+			`kind="${kind}", skill="${body.skillName}". ` +
+			`Run skill_describe(skill="${body.skillName}") first if you need the API/tool list and parameter names. ` +
+			`Map the request to the matching api/tool and its parameters; relay any options or confirmation ` +
+			`questions from the result to the user verbatim.`;
+		if (body.input) message += `\n\nRequest: ${body.input}`;
+	} else {
+		message = `/skill:${body.skillName}${body.input ? ` ${body.input}` : ""}`;
+	}
+
 	const promptBody: PromptRequestBody = {
-		message: `/skill:${body.skillName}${body.input ? ` ${body.input}` : ""}`,
+		message,
 		agentId: body.agentId,
 		sessionId: body.sessionId,
 		stream: body.stream ?? true,

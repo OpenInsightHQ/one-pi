@@ -17,6 +17,7 @@ import {
 	getUserMemoriesWithAccess,
 	isAgentPrincipalId,
 } from "./mongo/index.js";
+import { syncPersonalSkills } from "./mongo/personal-skill-sync.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
 import type { CreateAgentSessionOptions } from "./sdk.js";
@@ -225,7 +226,15 @@ export async function createHttpResourceLoader(
 	const agentDir = getAgentDir();
 	const additionalSkillPaths: string[] = [];
 
-	// (1) Personal skills — stored in the user's own skill directory
+	// (1) Personal skills — stored in the user's own skill directory.
+	// Lazily sync skill-creator output into the `skills` collection first
+	// (throttled 60s/user) so freshly created personal skills are part of
+	// the catalog/ACL machinery without any install step.
+	try {
+		await syncPersonalSkills(userId);
+	} catch {
+		// Non-fatal: personal skills still load from disk below.
+	}
 	const userSkillsDir = join(getSessionsDir(), userId, "skills");
 	if (existsSync(userSkillsDir)) {
 		additionalSkillPaths.push(userSkillsDir);
