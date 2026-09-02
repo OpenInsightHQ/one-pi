@@ -1,7 +1,7 @@
 import { checkPermission } from "./acl.js";
 import { hasCredentialsWithRef } from "./credential-service.js";
 import { getDb, isMongoEnabled } from "./db.js";
-import { getMcpServerModel } from "./models.js";
+import { getMcpServerModel, getSkillModel } from "./models.js";
 import { type AuthorizedSkill, getAgentSkillNames, getAuthorizedSkills, isAgentPrincipalId } from "./skill-catalog.js";
 import type { McpServerDoc } from "./types.js";
 import { PermissionBits } from "./types.js";
@@ -214,15 +214,79 @@ export function formatMcpSkillsPrompt(entries: McpSkillCatalogEntry[]): string {
 export async function buildSkillCatalogSuffix(userId: string, agentId?: string | null): Promise<string> {
 	if (!isMongoEnabled()) return "";
 	try {
-		const [httpEntries, mcpEntries] = await Promise.all([
+		const [httpEntries, mcpEntries, repoNotes] = await Promise.all([
 			getHttpSkillEntries(userId, agentId),
 			getMcpSkillEntries(userId),
+			buildRepoCredentialNotes(userId, agentId),
 		]);
-		const parts = [formatHttpSkillsPrompt(httpEntries), formatMcpSkillsPrompt(mcpEntries)].filter(Boolean);
+		const parts = [formatHttpSkillsPrompt(httpEntries), formatMcpSkillsPrompt(mcpEntries), repoNotes].filter(Boolean);
 		return parts.join("\n");
 	} catch (error) {
 		const msg = error instanceof Error ? error.message : String(error);
 		console.warn(`[Catalog] Failed to build skill catalog for user ${userId}: ${msg}`);
+		return "";
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Repo (script) skills requiring credentials
+// ---------------------------------------------------------------------------
+
+/**
+ * Renders the `<repo_skill_credentials>` block: repo-type skills (uploaded,
+ * admin-configured in dmp, or personal skill-creator output) that require
+ * credentials. These MUST be executed via skill_execute(kind="script") —
+ * credentials are injected server-side and are never reachable through bash.
+ */
+export async function buildRepoCredentialNotes(userId: string, agentId?: string | null): Promise<string> {
+	if (!isMongoEnabled()) return "";
+	try {
+		await getDb();
+		const Skill = getSkillModel();
+		const query = { skillType: "repo", requiresCredentials: true, status: 1 };
+		const [ownDocs, authorized] = await Promise.all([
+			Skill.find({ ...query, author: userId }).lean(),
+			getAuthorizedSkills(userId),
+		]);
+		const byName = new Map<string, { name: string; credentialRef?: string }>();
+		for (const doc of ownDocs) {
+			byName.set(doc.name, { name: doc.name, credentialRef: doc.credentialRef });
+		}
+		for (const skill of authorized) {
+			if (skill.skillType === "http" || skill.skillType === "mcp") continue;
+			if (skill.requiresCredentials !== true) continue;
+			if (!byName.has(skill.name)) {
+				byName.set(skill.name, { name: skill.name, credentialRef: skill.credentialRef });
+			}
+		}
+		if (isAgentPrincipalId(agentId)) {
+			const names = new Set((await getAgentSkillNames(agentId)) ?? []);
+			for (const name of [...byName.keys()]) {
+				if (!names.has(name)) byName.delete(name);
+			}
+		}
+		if (byName.size === 0) return "";
+
+		const lines = [
+			"\n\nThe following repo skills require credentials.",
+			'ALWAYS execute them with skill_execute(kind="script", skill="<name>", api="run", params) instead of bash —',
+			"credentials are injected server-side and never available to bash or the read tool.",
+			"If a skill's credential is not configured, tell the user to bind it on the user portal, then retry.",
+			"",
+			"<repo_skill_credentials>",
+		];
+		for (const entry of byName.values()) {
+			const configured = await hasCredentialsWithRef(userId, "skill", entry.name, entry.credentialRef);
+			lines.push(`  <skill>`);
+			lines.push(`    <name>${escapeXml(entry.name)}</name>`);
+			lines.push(`    <status>${configured ? "configured" : "NOT configured"}</status>`);
+			lines.push(`  </skill>`);
+		}
+		lines.push("</repo_skill_credentials>");
+		return lines.join("\n");
+	} catch (error) {
+		const msg = error instanceof Error ? error.message : String(error);
+		console.warn(`[Catalog] Failed to build repo credential notes for user ${userId}: ${msg}`);
 		return "";
 	}
 }
