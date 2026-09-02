@@ -9,7 +9,7 @@ import {
 	findRepoSkillEntry,
 	type HttpSkillCatalogEntry,
 } from "../mongo/catalog-service.js";
-import { maskSecretValues, type ResolvedCredential, resolveCredentials } from "../mongo/credential-service.js";
+import { maskSecretValues, type ResolvedCredential, resolveCredentialsWithRef } from "../mongo/credential-service.js";
 import { isMongoEnabled } from "../mongo/db.js";
 import type { CredentialBinding } from "../mongo/types.js";
 import { callMCPTool, type MCPToolConfig, probeMcpServerTools } from "./mcp-registry.js";
@@ -117,7 +117,7 @@ async function executeHttpApi(
 
 	let credentials: ResolvedCredential | null = null;
 	if (entry.requiresCredentials) {
-		credentials = await resolveCredentials(userId, "skill", entry.name, {
+		credentials = await resolveCredentialsWithRef(userId, "skill", entry.name, entry.skill.credentialRef, {
 			userManaged: entry.skill.userManaged !== false,
 		});
 		if (!credentials) {
@@ -208,7 +208,7 @@ async function resolveMcpToolConfig(
 	const headers: Record<string, string> = { ...staticHeaders };
 	let credentials: ResolvedCredential | null = null;
 	if (entry.requiresCredentials) {
-		credentials = await resolveCredentials(userId, "mcp", serverName, {
+		credentials = await resolveCredentialsWithRef(userId, "mcp", serverName, entry.server.credentialRef, {
 			userManaged: entry.server.userManaged !== false,
 		});
 		if (!credentials) {
@@ -384,7 +384,7 @@ export function createSkillDispatchTools(userId: string, agentId?: string | null
 					const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
 					const entry = await findMcpServerEntry(userId, skill);
 					if (entry?.requiresCredentials) {
-						const credentials = await resolveCredentials(userId, "mcp", skill);
+						const credentials = await resolveCredentialsWithRef(userId, "mcp", skill, entry.server.credentialRef);
 						if (credentials) return textResult(maskSecretValues(text, credentials.values));
 					}
 					return textResult(text);
@@ -396,7 +396,7 @@ export function createSkillDispatchTools(userId: string, agentId?: string | null
 					}
 					let credentials: ResolvedCredential | null = null;
 					if (repoSkill.requiresCredentials) {
-						credentials = await resolveCredentials(userId, "skill", skill, {
+						credentials = await resolveCredentialsWithRef(userId, "skill", skill, repoSkill.credentialRef, {
 							userManaged: repoSkill.userManaged !== false,
 						});
 						if (!credentials) {

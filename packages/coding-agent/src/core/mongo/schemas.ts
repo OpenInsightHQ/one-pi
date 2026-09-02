@@ -47,6 +47,7 @@ export const skillSchema = new Schema<SkillDoc>(
 		userManaged: { type: Boolean },
 		credentialSchema: { type: [Schema.Types.Mixed], default: undefined },
 		apiDefinitions: { type: [Schema.Types.Mixed], default: undefined },
+		credentialRef: { type: String },
 		source: { type: String },
 		_class: { type: String },
 	},
@@ -67,6 +68,7 @@ export const mcpServerSchema = new Schema<McpServerDoc>(
 		userManaged: { type: Boolean },
 		credentialSchema: { type: [Schema.Types.Mixed], default: undefined },
 		credentialBinding: { type: Schema.Types.Mixed, default: undefined },
+		credentialRef: { type: String },
 		_class: { type: String },
 	},
 	// Collection is owned by arp/LibreChat; strict:false preserves arp-written
@@ -82,7 +84,7 @@ mcpServerSchema.index({ serverName: 1 });
 export const skillCredentialSchema = new Schema<SkillCredentialDoc>(
 	{
 		userId: { type: Schema.Types.ObjectId, required: true },
-		resourceType: { type: String, required: true, enum: ["skill", "mcp"] },
+		resourceType: { type: String, required: true, enum: ["skill", "mcp", "credential"] },
 		resourceName: { type: String, required: true },
 		cipher: { type: String, default: "aes-256-gcm" },
 		iv: { type: String, required: true },
@@ -91,6 +93,7 @@ export const skillCredentialSchema = new Schema<SkillCredentialDoc>(
 		keyVersion: { type: Number, default: 1 },
 		lastVerifiedAt: { type: Date, default: null },
 		status: { type: String, default: "active" },
+		schemaJson: { type: String },
 		_class: { type: String },
 	},
 	{ strict: false, timestamps: true, collection: "skillcredentials" },

@@ -77,11 +77,13 @@ export {
 	getMasterKey,
 	getUserCredentials,
 	hasCredentials,
+	hasCredentialsWithRef,
 	isCredentialStoreConfigured,
 	markCredentialStatus,
 	maskSecretValues,
 	type ResolvedCredential,
 	resolveCredentials,
+	resolveCredentialsWithRef,
 	type SetCredentialParams,
 	setCredentials,
 } from "./credential-service.js";

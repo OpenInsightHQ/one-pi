@@ -87,6 +87,12 @@ export interface SkillDoc {
 	apiDefinitions?: Array<Record<string, unknown>>;
 	/** How resolved credential values are injected (http skills: request headers) */
 	credentialBinding?: CredentialBinding;
+	/**
+	 * Name of a standalone credential (skillcredentials, resourceType=credential)
+	 * referenced by this skill. Resolution order at execution: own binding
+	 * first, then this reference.
+	 */
+	credentialRef?: string;
 	/** Origin of the skill record (e.g. `skill-creator` for synced personal skills) */
 	source?: string;
 	createdAt?: Date;
@@ -371,7 +377,7 @@ export interface Principal {
 // Skill credential contract (skillcredentials collection)
 // ---------------------------------------------------------------------------
 
-export type CredentialResourceType = "skill" | "mcp";
+export type CredentialResourceType = "skill" | "mcp" | "credential";
 export type CredentialStatus = "active" | "invalid";
 
 /**
@@ -420,6 +426,11 @@ export interface SkillCredentialDoc {
 	keyVersion?: number;
 	lastVerifiedAt?: Date | null;
 	status?: CredentialStatus;
+	/**
+	 * Plaintext credential-schema JSON — only used by standalone credentials
+	 * (resourceType=credential) so bind forms can render without decrypting.
+	 */
+	schemaJson?: string;
 	createdAt?: Date;
 	updatedAt?: Date;
 	_class?: string;
@@ -441,6 +452,11 @@ export interface McpServerDoc {
 	userManaged?: boolean;
 	credentialSchema?: CredentialSchemaField[];
 	credentialBinding?: McpCredentialBinding;
+	/**
+	 * Name of a standalone credential (resourceType=credential) referenced by
+	 * this server. Resolution order: own binding first, then this reference.
+	 */
+	credentialRef?: string;
 	createdAt?: Date;
 	updatedAt?: Date;
 	__v?: number;

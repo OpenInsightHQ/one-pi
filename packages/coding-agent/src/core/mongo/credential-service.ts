@@ -286,6 +286,40 @@ export async function resolveCredentials(
 }
 
 /**
+ * Reference-aware resolution: the resource's own binding first, then the
+ * standalone credential named by `credentialRef` (resourceType=credential,
+ * same user/admin fallback rule). Used by the skill dispatch executors.
+ */
+export async function resolveCredentialsWithRef(
+	userId: string,
+	resourceType: CredentialResourceType,
+	resourceName: string,
+	credentialRef?: string | null,
+	opts?: { userManaged?: boolean },
+): Promise<ResolvedCredential | null> {
+	const own = await resolveCredentials(userId, resourceType, resourceName, opts);
+	if (own) return own;
+	if (!credentialRef) return null;
+	return resolveCredentials(userId, "credential", credentialRef, opts);
+}
+
+/**
+ * Reference-aware existence check (no decryption): own binding OR the
+ * referenced standalone credential. Used for catalog status markers.
+ */
+export async function hasCredentialsWithRef(
+	userId: string,
+	resourceType: CredentialResourceType,
+	resourceName: string,
+	credentialRef?: string | null,
+	opts?: { userManaged?: boolean },
+): Promise<boolean> {
+	if (await hasCredentials(userId, resourceType, resourceName, opts)) return true;
+	if (!credentialRef) return false;
+	return hasCredentials(userId, "credential", credentialRef, opts);
+}
+
+/**
  * Whether an effective credential exists for a user (per the §3.4 rule).
  * Cheaper than {@link resolveCredentials}: checks document existence only,
  * never decrypts.

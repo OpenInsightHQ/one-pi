@@ -1,5 +1,5 @@
 import { checkPermission } from "./acl.js";
-import { hasCredentials } from "./credential-service.js";
+import { hasCredentialsWithRef } from "./credential-service.js";
 import { getDb, isMongoEnabled } from "./db.js";
 import { getMcpServerModel } from "./models.js";
 import { type AuthorizedSkill, getAgentSkillNames, getAuthorizedSkills, isAgentPrincipalId } from "./skill-catalog.js";
@@ -92,7 +92,9 @@ async function getHttpSkillEntries(userId: string, agentId?: string | null): Pro
 		const requiresCredentials = skill.requiresCredentials === true;
 		const credentialConfigured =
 			!requiresCredentials ||
-			(await hasCredentials(userId, "skill", skill.name, { userManaged: skill.userManaged !== false }));
+			(await hasCredentialsWithRef(userId, "skill", skill.name, skill.credentialRef, {
+				userManaged: skill.userManaged !== false,
+			}));
 		entries.push({
 			name: skill.name,
 			description: skill.description ?? skill.displayName,
@@ -130,7 +132,9 @@ async function getMcpSkillEntries(userId: string): Promise<McpSkillCatalogEntry[
 		const requiresCredentials = server.requiresCredentials === true;
 		const credentialConfigured =
 			!requiresCredentials ||
-			(await hasCredentials(userId, "mcp", server.serverName, { userManaged: server.userManaged !== false }));
+			(await hasCredentialsWithRef(userId, "mcp", server.serverName, server.credentialRef, {
+				userManaged: server.userManaged !== false,
+			}));
 		entries.push({
 			name: server.serverName,
 			serverUrl,

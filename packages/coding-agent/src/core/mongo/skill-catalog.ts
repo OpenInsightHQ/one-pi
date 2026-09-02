@@ -32,6 +32,7 @@ export interface AuthorizedSkill {
 	requiresCredentials?: boolean;
 	userManaged?: boolean;
 	credentialBinding?: import("./types.js").CredentialBinding;
+	credentialRef?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +65,7 @@ function toAuthorizedSkill(doc: SkillDoc): AuthorizedSkill | null {
 		requiresCredentials: doc.requiresCredentials,
 		userManaged: doc.userManaged,
 		credentialBinding: doc.credentialBinding,
+		credentialRef: doc.credentialRef,
 	};
 }
 
