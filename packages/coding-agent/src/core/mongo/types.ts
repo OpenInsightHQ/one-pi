@@ -81,14 +81,14 @@ export interface SkillDoc {
 	requiresCredentials?: boolean;
 	/** true = users bind their own credentials (fallback: admin binding); false = admin-managed only */
 	userManaged?: boolean;
-	/** Declares which secret fields this skill needs (values live in `skillcredentials`) */
+	/** Declares which secret fields this skill needs (values live in `credentials`) */
 	credentialSchema?: CredentialSchemaField[];
 	/** http skills: API definitions stored inline (former apis.json content) for pi direct-read */
 	apiDefinitions?: Array<Record<string, unknown>>;
 	/** How resolved credential values are injected (http skills: request headers) */
 	credentialBinding?: CredentialBinding;
 	/**
-	 * Name of a standalone credential (skillcredentials, resourceType=credential)
+	 * Name of a standalone credential (credentials, resourceType=credential)
 	 * referenced by this skill. Resolution order at execution: own binding
 	 * first, then this reference.
 	 */
@@ -374,7 +374,7 @@ export interface Principal {
 }
 
 // ---------------------------------------------------------------------------
-// Skill credential contract (skillcredentials collection)
+// Skill credential contract (credentials collection)
 // ---------------------------------------------------------------------------
 
 export type CredentialResourceType = "skill" | "mcp" | "credential";

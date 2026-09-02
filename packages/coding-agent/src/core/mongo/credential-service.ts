@@ -6,7 +6,7 @@ import { ADMIN_CREDENTIAL_USER_ID, type CredentialResourceType, type SkillCreden
 /**
  * Skill/MCP credential service.
  *
- * Credentials live in the `skillcredentials` collection, encrypted with
+ * Credentials live in the `credentials` collection, encrypted with
  * AES-256-GCM under a master key from the `PI_CREDENTIAL_MASTER_KEY` env var
  * (base64, 32 bytes). The same cipher spec is implemented by dmp (Java) and
  * arp (Node) — keep the three implementations in sync when changing anything
@@ -165,7 +165,8 @@ async function loadValues(
 	if (!key) return null;
 
 	const doc = await findCredentialDoc(userId, resourceType, resourceName);
-	if (!doc) return null;
+	// Declaration-only docs (no cipher data) count as unbound.
+	if (!doc || !doc.data) return null;
 
 	let values: Record<string, string>;
 	try {
@@ -286,37 +287,46 @@ export async function resolveCredentials(
 }
 
 /**
- * Reference-aware resolution: the resource's own binding first, then the
- * standalone credential named by `credentialRef` (resourceType=credential,
- * same user/admin fallback rule). Used by the skill dispatch executors.
+ * Reference-based resolution (either/or, no fallback): when the referenced
+ * credential has admin-configured values it is admin-managed (admin wins);
+ * otherwise ONLY the user's own binding of that credential counts. Used by
+ * the skill dispatch executors and catalog status markers.
  */
 export async function resolveCredentialsWithRef(
 	userId: string,
-	resourceType: CredentialResourceType,
-	resourceName: string,
+	_resourceType: CredentialResourceType,
+	_resourceName: string,
 	credentialRef?: string | null,
-	opts?: { userManaged?: boolean },
 ): Promise<ResolvedCredential | null> {
-	const own = await resolveCredentials(userId, resourceType, resourceName, opts);
-	if (own) return own;
 	if (!credentialRef) return null;
-	return resolveCredentials(userId, "credential", credentialRef, opts);
+	const adminValues = await loadValues(ADMIN_CREDENTIAL_USER_ID, "credential", credentialRef);
+	if (adminValues) return { source: "admin", values: adminValues };
+	const userValues = await loadValues(userId, "credential", credentialRef);
+	return userValues ? { source: "user", values: userValues } : null;
 }
 
 /**
- * Reference-aware existence check (no decryption): own binding OR the
- * referenced standalone credential. Used for catalog status markers.
+ * Reference-aware existence check (no decryption): the referenced credential
+ * counts as configured when the admin set values OR the user bound their own.
  */
 export async function hasCredentialsWithRef(
 	userId: string,
-	resourceType: CredentialResourceType,
-	resourceName: string,
+	_resourceType: CredentialResourceType,
+	_resourceName: string,
 	credentialRef?: string | null,
-	opts?: { userManaged?: boolean },
 ): Promise<boolean> {
-	if (await hasCredentials(userId, resourceType, resourceName, opts)) return true;
 	if (!credentialRef) return false;
-	return hasCredentials(userId, "credential", credentialRef, opts);
+	if (!isMongoEnabled()) return false;
+	await getDb();
+	const withValues = { resourceType: "credential" as const, resourceName: credentialRef, data: { $ne: null } };
+	const SkillCredential = getSkillCredentialModel();
+	const admin = await SkillCredential.exists({
+		userId: ADMIN_CREDENTIAL_USER_ID,
+		...withValues,
+	}).exec();
+	if (admin) return true;
+	const own = await SkillCredential.exists({ userId, ...withValues }).exec();
+	return own !== null;
 }
 
 /**
@@ -333,18 +343,18 @@ export async function hasCredentials(
 	if (!isMongoEnabled()) return false;
 	await getDb();
 	const userManaged = opts?.userManaged ?? true;
+	// Declaration-only docs (data == null) do not count as configured.
+	const withValues = { resourceType, resourceName, data: { $ne: null } };
 	const SkillCredential = getSkillCredentialModel();
 	if (userManaged) {
-		const own = await SkillCredential.exists({ userId, resourceType, resourceName }).exec();
+		const own = await SkillCredential.exists({ userId, ...withValues }).exec();
 		if (own) return true;
 	}
-	return (
-		(await SkillCredential.exists({
-			userId: ADMIN_CREDENTIAL_USER_ID,
-			resourceType,
-			resourceName,
-		}).exec()) !== null
-	);
+	const admin = await SkillCredential.exists({
+		userId: ADMIN_CREDENTIAL_USER_ID,
+		...withValues,
+	}).exec();
+	return admin !== null;
 }
 
 /** Records a verification outcome on a binding (used by verify endpoints). */

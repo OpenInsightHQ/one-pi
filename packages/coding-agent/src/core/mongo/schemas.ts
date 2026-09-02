@@ -78,7 +78,7 @@ export const mcpServerSchema = new Schema<McpServerDoc>(
 mcpServerSchema.index({ serverName: 1 });
 
 // ---------------------------------------------------------------------------
-// skillcredentials (AES-256-GCM encrypted skill/MCP credentials)
+// credentials (AES-256-GCM encrypted skill/MCP credentials)
 // ---------------------------------------------------------------------------
 
 export const skillCredentialSchema = new Schema<SkillCredentialDoc>(
@@ -96,7 +96,7 @@ export const skillCredentialSchema = new Schema<SkillCredentialDoc>(
 		schemaJson: { type: String },
 		_class: { type: String },
 	},
-	{ strict: false, timestamps: true, collection: "skillcredentials" },
+	{ strict: false, timestamps: true, collection: "credentials" },
 );
 // One credential document per (principal, resource).
 skillCredentialSchema.index({ userId: 1, resourceType: 1, resourceName: 1 }, { unique: true });

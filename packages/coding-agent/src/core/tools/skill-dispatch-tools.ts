@@ -59,11 +59,19 @@ function buildCredentialHeaders(
 		const bearerKey = schemaFields?.find((f) => f.sensitive)?.secretKey ?? Object.keys(credentials.values)[0];
 		const token = credentials.values[bearerKey];
 		if (token) headers.Authorization = `Bearer ${token}`;
+		return headers;
 	}
 	const headerMap = binding?.headerMap ?? {};
-	for (const [secretKey, headerName] of Object.entries(headerMap)) {
-		const value = credentials.values[secretKey];
-		if (value) headers[headerName] = value;
+	if (Object.keys(headerMap).length > 0) {
+		for (const [secretKey, headerName] of Object.entries(headerMap)) {
+			const value = credentials.values[secretKey];
+			if (value) headers[headerName] = value;
+		}
+	} else {
+		// Default: no explicit mapping — use the credential field names as header keys.
+		for (const [secretKey, value] of Object.entries(credentials.values)) {
+			if (value) headers[secretKey] = value;
+		}
 	}
 	return headers;
 }
@@ -117,9 +125,7 @@ async function executeHttpApi(
 
 	let credentials: ResolvedCredential | null = null;
 	if (entry.requiresCredentials) {
-		credentials = await resolveCredentialsWithRef(userId, "skill", entry.name, entry.skill.credentialRef, {
-			userManaged: entry.skill.userManaged !== false,
-		});
+		credentials = await resolveCredentialsWithRef(userId, "skill", entry.name, entry.skill.credentialRef);
 		if (!credentials) {
 			const needed = (entry.skill as { credentialSchema?: Array<{ secretKey: string; displayName?: string }> })
 				.credentialSchema;
@@ -208,9 +214,7 @@ async function resolveMcpToolConfig(
 	const headers: Record<string, string> = { ...staticHeaders };
 	let credentials: ResolvedCredential | null = null;
 	if (entry.requiresCredentials) {
-		credentials = await resolveCredentialsWithRef(userId, "mcp", serverName, entry.server.credentialRef, {
-			userManaged: entry.server.userManaged !== false,
-		});
+		credentials = await resolveCredentialsWithRef(userId, "mcp", serverName, entry.server.credentialRef);
 		if (!credentials) {
 			const names =
 				(entry.server.credentialSchema ?? []).map((f) => f.displayName ?? f.secretKey).join(", ") || "credentials";
@@ -396,9 +400,7 @@ export function createSkillDispatchTools(userId: string, agentId?: string | null
 					}
 					let credentials: ResolvedCredential | null = null;
 					if (repoSkill.requiresCredentials) {
-						credentials = await resolveCredentialsWithRef(userId, "skill", skill, repoSkill.credentialRef, {
-							userManaged: repoSkill.userManaged !== false,
-						});
+						credentials = await resolveCredentialsWithRef(userId, "skill", skill, repoSkill.credentialRef);
 						if (!credentials) {
 							return textResult(CREDENTIAL_MISSING_GUIDANCE("skill", skill, "credentials"));
 						}

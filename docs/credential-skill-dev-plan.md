@@ -23,8 +23,8 @@
 
 ```
 dmp(管理员) ──写──> skills / mcpservers (定义 + requiresCredentials 声明)
-dmp(管理员) ──写──> skillcredentials (管理员凭证, 加密)
-arp(用户)   ──写──> skillcredentials (用户凭证, 加密)
+dmp(管理员) ──写──> credentials (管理员凭证, 加密)
+arp(用户)   ──写──> credentials (用户凭证, 加密)
 arp(用户)   ──写──> skills / mcpservers (用户自建 http/mcp)
 
 pi 会话创建:
@@ -46,7 +46,7 @@ pi 会话创建:
 {
   requiresCredentials: true,            // 是否需要凭证
   userManaged: true,                    // 凭证是否由用户自设（false=仅管理员统一配置）
-  credentialSchema: [                   // 凭证字段声明（值存 skillcredentials，此处只存定义）
+  credentialSchema: [                   // 凭证字段声明（值存 credentials，此处只存定义）
     { "secretKey": "app_id",     "displayName": "App ID",    "sensitive": false },
     { "secretKey": "app_secret", "displayName": "App Secret", "sensitive": true }
   ],
@@ -69,7 +69,7 @@ pi 会话创建:
 }
 ```
 
-### 3.3 新集合 `skillcredentials`
+### 3.3 新集合 `credentials`
 
 ```json5
 {
@@ -108,7 +108,7 @@ pi 会话创建:
 
 | 项 | 说明 | 位置 |
 |---|---|---|
-| SkillCredential 文档/仓库 | `@Document("skillcredentials")` + Spring Data Repository | `dmp-closed-source/agent-platform-module`（与 Skill/McpServer 同层） |
+| SkillCredential 文档/仓库 | `@Document("credentials")` + Spring Data Repository | `dmp-closed-source/agent-platform-module`（与 Skill/McpServer 同层） |
 | 凭证 Service/Controller | 管理员凭证 CRUD（加解密按 3.3 规范）、验证（按平台调一次测试接口写 lastVerifiedAt） | `yudao-module-store-biz` 新增 `controller/admin/skillcredential/` |
 | 字段扩展 | `Skill.java`、`McpServer.java` 增加 3.1/3.2 字段 | `agent-platform-api/model/` |
 | http 技能入库 | HttpSkill 保存时把 apiDefinitions 写入 skills 文档（pi 直读的前提） | `HttpSkillServiceImpl` / `SkillRegistryServiceImpl` |
@@ -225,7 +225,7 @@ arp 外层 agent 的 `execute_skill {skillName, input}` 转发到 pi `POST /exec
 ### 6.1 我的凭证（左下角菜单）
 
 - client：`client/src/components/SidePanel/` 下新增入口（现有 MCPBuilder 同级），路由/菜单注册到左下角
-- api：新增 `api/server/routes/credential.js` + data-schemas 模型（读写 `skillcredentials`，Node 端加密与 3.3 规范一致）：
+- api：新增 `api/server/routes/credential.js` + data-schemas 模型（读写 `credentials`，Node 端加密与 3.3 规范一致）：
 
 ```
 GET    /api/credentials            我绑定的凭证列表（resourceType+name+status+lastVerifiedAt，脱敏）
@@ -234,7 +234,7 @@ DELETE /api/credentials/:type/:name   解绑
 POST   /api/credentials/:type/:name/verify   验证（转发 pi 或直接实现）
 ```
 
-- 列表数据源：查询 `skills`/`mcpservers` 中 `userManaged=true` 且我有权使用的技能 + `skillcredentials` 中 userId=我的绑定状态
+- 列表数据源：查询 `skills`/`mcpservers` 中 `userManaged=true` 且我有权使用的技能 + `credentials` 中 userId=我的绑定状态
 
 ### 6.2 我的 skill
 
@@ -268,7 +268,7 @@ POST   /api/credentials/:type/:name/verify   验证（转发 pi 或直接实现�
 ## 8. 开发顺序与里程碑
 
 1. **M1 契约冻结**：3.x 数据模型 + 加密互操作规范（三端评审，先合入字段定义，向后兼容）
-2. **M2 dmp**：skillcredentials 后端 + 技能字段扩展 + 前端凭证管理（可用常量 key 先行）
+2. **M2 dmp**：credentials 后端 + 技能字段扩展 + 前端凭证管理（可用常量 key 先行）
 3. **M3 pi**：credential-service → 直读加载 → prompt 注入 → skill_describe/skill_execute 执行链 → 凭证缺失引导
 4. **M4 arp**：我的凭证 → 我的 skill（列表/绑定/上传/创建/测试连接）
 5. **M5 联调 E2E**：管理员配凭证→用户调 skill；用户自绑→调用；未绑定→引导→绑定→重试 三条主链路
@@ -277,7 +277,7 @@ POST   /api/credentials/:type/:name/verify   验证（转发 pi 或直接实现�
 
 ## 9. 安全要点 Checklist
 
-- [ ] skillcredentials 任何读接口不回显 data/iv/authTag，GET 只返回状态
+- [ ] credentials 任何读接口不回显 data/iv/authTag，GET 只返回状态
 - [ ] 凭证解密仅发生在 pi 执行器 / arp、dmp 写入前的加密点；明文进程内 TTL 缓存，set 即失效
 - [ ] 模型可执行面无凭证：skill_execute 的 params 为受 schema 校验的数据；script 型服务端 spawn、不走 shell、不经 bash 工具
 - [ ] script stdout/stderr 精确值擦洗后再返回模型

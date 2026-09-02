@@ -91,10 +91,7 @@ async function getHttpSkillEntries(userId: string, agentId?: string | null): Pro
 		if (apiCount === 0) continue;
 		const requiresCredentials = skill.requiresCredentials === true;
 		const credentialConfigured =
-			!requiresCredentials ||
-			(await hasCredentialsWithRef(userId, "skill", skill.name, skill.credentialRef, {
-				userManaged: skill.userManaged !== false,
-			}));
+			!requiresCredentials || (await hasCredentialsWithRef(userId, "skill", skill.name, skill.credentialRef));
 		entries.push({
 			name: skill.name,
 			description: skill.description ?? skill.displayName,
@@ -131,10 +128,7 @@ async function getMcpSkillEntries(userId: string): Promise<McpSkillCatalogEntry[
 		if (!serverUrl) continue;
 		const requiresCredentials = server.requiresCredentials === true;
 		const credentialConfigured =
-			!requiresCredentials ||
-			(await hasCredentialsWithRef(userId, "mcp", server.serverName, server.credentialRef, {
-				userManaged: server.userManaged !== false,
-			}));
+			!requiresCredentials || (await hasCredentialsWithRef(userId, "mcp", server.serverName, server.credentialRef));
 		entries.push({
 			name: server.serverName,
 			serverUrl,
