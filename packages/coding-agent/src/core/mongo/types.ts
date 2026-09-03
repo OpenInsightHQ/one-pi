@@ -403,6 +403,8 @@ export interface CredentialBinding {
 	headerMap?: Record<string, string>;
 	/** `bearer` = first sensitive field becomes `Authorization: Bearer <value>` */
 	authType?: "headers" | "bearer";
+	/** Script (repo) skills: secretKey → environment variable name; unmapped fields use their own name */
+	envMap?: Record<string, string>;
 }
 
 /** Backwards-compatible alias: credential binding on `mcpservers` documents. */

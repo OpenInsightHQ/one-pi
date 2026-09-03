@@ -61,24 +61,20 @@ function buildCredentialHeaders(
 		if (token) headers.Authorization = `Bearer ${token}`;
 		return headers;
 	}
+	// Per-field mapping: mapped fields use headerMap, unmapped fields fall
+	// back to their own credential field name as the header key.
 	const headerMap = binding?.headerMap ?? {};
-	if (Object.keys(headerMap).length > 0) {
-		for (const [secretKey, headerName] of Object.entries(headerMap)) {
-			const value = credentials.values[secretKey];
-			if (value) headers[headerName] = value;
-		}
-	} else {
-		// Default: no explicit mapping — use the credential field names as header keys.
-		for (const [secretKey, value] of Object.entries(credentials.values)) {
-			if (value) headers[secretKey] = value;
-		}
+	for (const [secretKey, value] of Object.entries(credentials.values)) {
+		if (!value) continue;
+		const headerName = headerMap[secretKey] || secretKey;
+		headers[headerName] = value;
 	}
 	return headers;
 }
 
-/** Environment variable name for a script skill credential: `app_secret` → `SKILL_APP_SECRET`. */
-function credentialEnvName(secretKey: string): string {
-	return `SKILL_${secretKey.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}`;
+/** Environment variable name for a script skill credential field: mapped env name, or the field name as-is. */
+function credentialEnvName(secretKey: string, envBinding?: { envMap?: Record<string, string> }): string {
+	return envBinding?.envMap?.[secretKey] || secretKey;
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +250,7 @@ function executeScriptSkill(
 	skillDir: string,
 	credentials: ResolvedCredential | null,
 	params: Record<string, unknown>,
+	envBinding?: { envMap?: Record<string, string> },
 ): Promise<string> {
 	const scriptPath = join(skillDir, "scripts", "main.py");
 	if (!existsSync(scriptPath)) {
@@ -265,7 +262,7 @@ function executeScriptSkill(
 	}
 	if (credentials) {
 		for (const [secretKey, value] of Object.entries(credentials.values)) {
-			env[credentialEnvName(secretKey)] = value;
+			env[credentialEnvName(secretKey, envBinding)] = value;
 		}
 	}
 	return new Promise((resolve) => {
@@ -405,7 +402,9 @@ export function createSkillDispatchTools(userId: string, agentId?: string | null
 							return textResult(CREDENTIAL_MISSING_GUIDANCE("skill", skill, "credentials"));
 						}
 					}
-					return textResult(await executeScriptSkill(repoSkill.savePath, credentials, callParams));
+					return textResult(
+						await executeScriptSkill(repoSkill.savePath, credentials, callParams, repoSkill.credentialBinding),
+					);
 				}
 				return textResult(`Unknown kind "${kind}" (expected http | mcp | script).`);
 			} catch (error) {
