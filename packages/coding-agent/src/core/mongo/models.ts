@@ -122,7 +122,7 @@ export function getMcpServerModel(): McpServerModel {
 export type SkillCredentialModel = mongoose.Model<SkillCredentialDoc>;
 
 export function getSkillCredentialModel(): SkillCredentialModel {
-	return mongoose.model<SkillCredentialDoc>("SkillCredential", skillCredentialSchema, "skillcredentials");
+	return mongoose.model<SkillCredentialDoc>("SkillCredential", skillCredentialSchema, "credentials");
 }
 
 /**
