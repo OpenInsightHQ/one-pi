@@ -106,11 +106,40 @@ function summarizeHttpApi(api: HttpApiDef): string {
 	return parts.join("\n");
 }
 
+/**
+ * Normalizes params to a FLAT record: accepts flat values directly, and the
+ * nested form {path:{...}, query:{...}, header:{...}, body:{...}} the models
+ * tend to produce from the prefixed param names.
+ */
+function normalizeHttpParams(params: Record<string, unknown>): Record<string, unknown> {
+	const flat: Record<string, unknown> = { ...params };
+	for (const group of ["path", "query", "header", "headers", "body"]) {
+		const nested = flat[group];
+		if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+			for (const [key, value] of Object.entries(nested as Record<string, unknown>)) {
+				if (!(key in flat) || flat[key] === undefined) flat[key] = value;
+			}
+			delete flat[group];
+		}
+	}
+	return flat;
+}
+
+/** Session-context headers auto-filled for declared params: X-User-Id / X-Agent-Id. */
+function contextHeaders(api: HttpApiDef, userId: string, agentId?: string | null): Record<string, string> {
+	const declared = new Set([...(api.headerParams ?? []).map((p) => p.name.toLowerCase())]);
+	const auto: Record<string, string> = {};
+	if (declared.has("x-user-id")) auto["X-User-Id"] = userId;
+	if (agentId && declared.has("x-agent-id")) auto["X-Agent-Id"] = agentId;
+	return auto;
+}
+
 async function executeHttpApi(
 	userId: string,
+	agentId: string | null | undefined,
 	entry: HttpSkillCatalogEntry,
 	apiName: string,
-	params: Record<string, unknown>,
+	rawParams: Record<string, unknown>,
 ): Promise<string> {
 	const apis = (entry.skill.apiDefinitions ?? []) as HttpApiDef[];
 	const api = apis.find((a) => a.name === apiName && a.exposeToModel !== false);
@@ -118,6 +147,8 @@ async function executeHttpApi(
 		const available = apis.filter((a) => a.exposeToModel !== false && a.name).map((a) => a.name);
 		return `API "${apiName}" not found on http skill "${entry.name}". Available: ${available.join(", ") || "(none)"}`;
 	}
+	const params = normalizeHttpParams(rawParams ?? {});
+	const auto = contextHeaders(api, userId, agentId);
 
 	let credentials: ResolvedCredential | null = null;
 	if (entry.requiresCredentials) {
@@ -142,12 +173,17 @@ async function executeHttpApi(
 		}
 	}
 	for (const p of [...(api.queryParams ?? []), ...(api.headerParams ?? [])]) {
-		if (p.required && (params[p.name] === undefined || params[p.name] === null || params[p.name] === "")) {
+		const filled = params[p.name] !== undefined && params[p.name] !== null && params[p.name] !== "";
+		if (p.required && !filled && !(p.name in auto)) {
 			missing.push(p.name);
 		}
 	}
 	if (missing.length > 0) {
-		return `Missing required parameters: ${missing.join(", ")}. Provide them in params and retry.`;
+		return (
+			`Missing required parameters: ${missing.join(", ")}. ` +
+			`Provide them in params (flat JSON object, e.g. {"paramName": "value"}; ` +
+			`nested {"header":{...},"query":{...}} also accepted). X-User-Id is filled automatically.`
+		);
 	}
 
 	const method = (api.method ?? "GET").toUpperCase();
@@ -161,6 +197,11 @@ async function executeHttpApi(
 	}
 	for (const p of api.headerParams ?? []) {
 		if (params[p.name] !== undefined) headers[p.name] = String(params[p.name]);
+	}
+	// Session-context defaults (X-User-Id / X-Agent-Id) fill last, only when
+	// the caller didn't provide a value.
+	for (const [key, value] of Object.entries(auto)) {
+		if (!(key in headers)) headers[key] = value;
 	}
 
 	let body: string | undefined;
@@ -207,7 +248,9 @@ async function resolveMcpToolConfig(
 	if (!entry) return { error: `MCP server "${serverName}" not found or not visible to this user.` };
 
 	const { serverUrl, headers: staticHeaders } = extractMcpConnection(entry.server);
-	const headers: Record<string, string> = { ...staticHeaders };
+	// Session default headers (same contract as arp's MCPManager): the dmp
+	// backend identifies the calling user via x-user-id on every request.
+	const headers: Record<string, string> = { "x-user-id": userId, ...staticHeaders };
 	let credentials: ResolvedCredential | null = null;
 	if (entry.requiresCredentials) {
 		credentials = await resolveCredentialsWithRef(userId, "mcp", serverName, entry.server.credentialRef);
@@ -347,7 +390,12 @@ export function createSkillDispatchTools(userId: string, agentId?: string | null
 			if (httpEntry) {
 				const apis = (httpEntry.skill.apiDefinitions ?? []) as HttpApiDef[];
 				const visible = apis.filter((a) => a.exposeToModel !== false);
-				const lines = [`http skill "${skill}" — ${visible.length} API(s):`, ...visible.map(summarizeHttpApi)];
+				const lines = [
+					`http skill "${skill}" — ${visible.length} API(s):`,
+					...visible.map(summarizeHttpApi),
+					'params format: flat JSON object, e.g. {"paramName": "value"}; nested {"header":{...},"query":{...}} also accepted.',
+					"X-User-Id / X-Agent-Id header params are filled automatically from the session context.",
+				];
 				return textResult(lines.join("\n"));
 			}
 			const mcpResolved = await resolveMcpToolConfig(userId, skill, undefined);
@@ -392,7 +440,7 @@ export function createSkillDispatchTools(userId: string, agentId?: string | null
 				if (kind === "http") {
 					const entry = await findHttpSkillEntry(userId, agentId, skill);
 					if (!entry) return textResult(`http skill "${skill}" not found or not visible.`);
-					return textResult(await executeHttpApi(userId, entry, api, callParams));
+					return textResult(await executeHttpApi(userId, agentId, entry, api, callParams));
 				}
 				if (kind === "mcp") {
 					const resolved = await resolveMcpToolConfig(userId, skill, api);
