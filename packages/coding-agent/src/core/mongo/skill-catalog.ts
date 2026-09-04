@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { Types } from "mongoose";
 import { checkPermission, findAccessibleResourceIds } from "./acl.js";
 import { getDb, isMongoEnabled } from "./db.js";
 import { getAgentModel, getSkillModel } from "./models.js";
@@ -29,6 +30,8 @@ export interface AuthorizedSkill {
 	status?: number;
 	/** http skills: inline API definitions (pi direct-read, no savePath install) */
 	apiDefinitions?: Array<Record<string, unknown>>;
+	/** raw dmp config payload (specDocument/specFormat/specOperations for spec-defined http skills) */
+	config?: Record<string, unknown>;
 	requiresCredentials?: boolean;
 	userManaged?: boolean;
 	credentialBinding?: import("./types.js").CredentialBinding;
@@ -62,6 +65,7 @@ function toAuthorizedSkill(doc: SkillDoc): AuthorizedSkill | null {
 		skillType: doc.skillType,
 		status: doc.status,
 		apiDefinitions: doc.apiDefinitions,
+		config: doc.config,
 		requiresCredentials: doc.requiresCredentials,
 		userManaged: doc.userManaged,
 		credentialBinding: doc.credentialBinding,
@@ -92,6 +96,31 @@ export async function getAuthorizedSkillDirs(userId: string): Promise<string[]> 
  * Returns full metadata for all skills the user is authorized to use.
  * Only active (status=1) skills with an existing `savePath` are returned.
  */
+/**
+ * Returns the user's OWN skills of a given type (author = userId), mapped to
+ * {@link AuthorizedSkill}. Complements ACL-authorized skills so creators see
+ * their http/mcp skills without an explicit grant (same author channel the
+ * MCP catalog uses).
+ */
+export async function getOwnSkillsByType(userId: string, skillType: string): Promise<AuthorizedSkill[]> {
+	if (!isMongoEnabled()) return [];
+	await getDb();
+	const Skill = getSkillModel();
+	const docs: SkillDoc[] = await Skill.find({
+		skillType,
+		status: 1,
+		author: new Types.ObjectId(userId),
+	})
+		.lean()
+		.exec();
+	const results: AuthorizedSkill[] = [];
+	for (const doc of docs) {
+		const skill = toAuthorizedSkill(doc);
+		if (skill) results.push(skill);
+	}
+	return results;
+}
+
 export async function getAuthorizedSkills(userId: string): Promise<AuthorizedSkill[]> {
 	if (!isMongoEnabled()) return [];
 	await getDb();

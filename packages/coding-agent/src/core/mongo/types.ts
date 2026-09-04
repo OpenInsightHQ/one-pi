@@ -95,6 +95,8 @@ export interface SkillDoc {
 	credentialRef?: string;
 	/** Origin of the skill record (e.g. `skill-creator` for synced personal skills) */
 	source?: string;
+	/** dmp config payload (http: baseUrl/specDocument/specFormat/...; mcp: serverUrl/tools/...) */
+	config?: Record<string, unknown>;
 	createdAt?: Date;
 	updatedAt?: Date;
 	_class?: string;

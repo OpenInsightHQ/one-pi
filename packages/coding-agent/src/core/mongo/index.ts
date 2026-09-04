@@ -168,6 +168,7 @@ export {
 	getAllActiveSkills,
 	getAuthorizedSkillDirs,
 	getAuthorizedSkills,
+	getOwnSkillsByType,
 	getSkillIdByName,
 	isAgentPrincipalId,
 } from "./skill-catalog.js";

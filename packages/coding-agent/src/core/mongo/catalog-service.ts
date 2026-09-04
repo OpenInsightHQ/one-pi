@@ -1,8 +1,15 @@
+import { parseOpenApiSpec } from "../http-api-skill.js";
 import { findAccessibleResourceIds } from "./acl.js";
 import { hasCredentialsWithRef } from "./credential-service.js";
 import { getDb, isMongoEnabled } from "./db.js";
 import { getMcpServerModel, getSkillModel } from "./models.js";
-import { type AuthorizedSkill, getAgentSkillNames, getAuthorizedSkills, isAgentPrincipalId } from "./skill-catalog.js";
+import {
+	type AuthorizedSkill,
+	getAgentSkillNames,
+	getAuthorizedSkills,
+	getOwnSkillsByType,
+	isAgentPrincipalId,
+} from "./skill-catalog.js";
 import type { McpServerDoc } from "./types.js";
 import { ResourceType } from "./types.js";
 
@@ -86,6 +93,55 @@ export function extractMcpConnection(server: McpServerDoc): {
 }
 
 /** http-type skills visible to the principal (ACL / agent assignment). */
+const SPEC_API_CACHE_TTL_MS = 5 * 60 * 1000;
+const specApiCache = new Map<string, { apis: Array<Record<string, unknown>>; expiresAt: number }>();
+
+/**
+ * Resolves a skill's effective API definitions: inline top-level
+ * `apiDefinitions` (apis-list mode, mirrored by dmp) first; otherwise
+ * lazily parses the OpenAPI spec (inputType=1, config.specDocument or
+ * specUrl) with a 5-minute cache. Keeps spec-defined skills usable through
+ * the direct-read path without any install step.
+ */
+async function resolveHttpApiDefinitions(skill: AuthorizedSkill): Promise<Array<Record<string, unknown>>> {
+	if (Array.isArray(skill.apiDefinitions) && skill.apiDefinitions.length > 0) {
+		return skill.apiDefinitions;
+	}
+	const config = (skill as AuthorizedSkill & { config?: Record<string, unknown> }).config ?? {};
+	const specDocument = typeof config.specDocument === "string" ? config.specDocument : null;
+	const specUrl = typeof config.specUrl === "string" && config.specUrl ? config.specUrl : null;
+	if (!specDocument && !specUrl) return [];
+
+	const cached = specApiCache.get(skill.name);
+	if (cached && Date.now() < cached.expiresAt) return cached.apis;
+
+	try {
+		let document: unknown = specDocument;
+		if (!document && specUrl) {
+			const res = await fetch(specUrl, { signal: AbortSignal.timeout(10_000) });
+			document = await res.text();
+		}
+		let operations: string[] | undefined;
+		if (typeof config.specOperations === "string" && config.specOperations.trim()) {
+			try {
+				const parsed = JSON.parse(config.specOperations);
+				if (Array.isArray(parsed)) operations = parsed.map(String);
+			} catch {
+				// keep undefined → all operations
+			}
+		}
+		const format = config.specFormat === "json" ? ("json" as const) : ("yaml" as const);
+		const parsed = parseOpenApiSpec({ document, format, operations });
+		const apis = parsed.apis as unknown as Array<Record<string, unknown>>;
+		specApiCache.set(skill.name, { apis, expiresAt: Date.now() + SPEC_API_CACHE_TTL_MS });
+		return apis;
+	} catch (error) {
+		const msg = error instanceof Error ? error.message : String(error);
+		console.warn(`[Catalog] Failed to parse OpenAPI spec for http skill "${skill.name}": ${msg}`);
+		return [];
+	}
+}
+
 async function getHttpSkillEntries(userId: string, agentId?: string | null): Promise<HttpSkillCatalogEntry[]> {
 	let skills: AuthorizedSkill[] = [];
 	try {
@@ -95,29 +151,32 @@ async function getHttpSkillEntries(userId: string, agentId?: string | null): Pro
 			const authorized = await getAuthorizedSkills(userId);
 			skills = authorized.filter((s) => names.includes(s.name));
 		} else {
-			skills = await getAuthorizedSkills(userId);
+			// ACL-authorized ∪ own-authored (creators see their http skills
+			// without an explicit grant), deduped by id.
+			const [authorized, own] = await Promise.all([getAuthorizedSkills(userId), getOwnSkillsByType(userId, "http")]);
+			const seen = new Set(authorized.map((s) => s.id));
+			skills = [...authorized, ...own.filter((s) => !seen.has(s.id))];
 		}
 	} catch (error) {
 		const msg = error instanceof Error ? error.message : String(error);
 		console.warn(`[Catalog] Failed to load http skills for user ${userId}: ${msg}`);
 		return [];
 	}
-
 	const entries: HttpSkillCatalogEntry[] = [];
 	for (const skill of skills) {
 		if (skill.skillType !== "http") continue;
-		const apiCount = Array.isArray(skill.apiDefinitions) ? skill.apiDefinitions.length : 0;
-		if (apiCount === 0) continue;
+		const apis = await resolveHttpApiDefinitions(skill);
+		if (apis.length === 0) continue;
 		const requiresCredentials = skill.requiresCredentials === true;
 		const credentialConfigured =
 			!requiresCredentials || (await hasCredentialsWithRef(userId, "skill", skill.name, skill.credentialRef));
 		entries.push({
 			name: skill.name,
 			description: skill.description ?? skill.displayName,
-			apiCount,
+			apiCount: apis.length,
 			requiresCredentials,
 			credentialConfigured,
-			skill,
+			skill: { ...skill, apiDefinitions: apis },
 		});
 	}
 	return entries;
