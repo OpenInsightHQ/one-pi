@@ -1,10 +1,10 @@
-import { checkPermission } from "./acl.js";
+import { findAccessibleResourceIds } from "./acl.js";
 import { hasCredentialsWithRef } from "./credential-service.js";
 import { getDb, isMongoEnabled } from "./db.js";
 import { getMcpServerModel, getSkillModel } from "./models.js";
 import { type AuthorizedSkill, getAgentSkillNames, getAuthorizedSkills, isAgentPrincipalId } from "./skill-catalog.js";
 import type { McpServerDoc } from "./types.js";
-import { PermissionBits } from "./types.js";
+import { ResourceType } from "./types.js";
 
 /**
  * Two-stage skill catalog service.
@@ -111,6 +111,16 @@ async function getMcpSkillEntries(userId: string): Promise<McpSkillCatalogEntry[
 
 	const McpServer = getMcpServerModel();
 	const docs: McpServerDoc[] = await McpServer.find({}).lean<McpServerDoc[]>().exec();
+	if (docs.length === 0) return [];
+
+	// MCP visibility resolves through the unified skills registry: dmp grants
+	// MCP-skill ACLs as resourceType "skill" on the registry record (name =
+	// serverName), NOT resourceType "mcp" on the mcpservers doc. Registry-less
+	// servers (created directly in arp) fall back to authorship only.
+	const Skill = getSkillModel();
+	const registryDocs = await Skill.find({ skillType: "mcp" }).select("name _id").lean();
+	const registryIdByName = new Map(registryDocs.map((d) => [d.name, String(d._id)]));
+	const accessibleSkillIds = new Set((await findAccessibleResourceIds(userId, ResourceType.SKILL)).map(String));
 
 	const visible: McpServerDoc[] = [];
 	for (const doc of docs) {
@@ -118,8 +128,10 @@ async function getMcpSkillEntries(userId: string): Promise<McpSkillCatalogEntry[
 			visible.push(doc);
 			continue;
 		}
-		const granted = await checkPermission(userId, "mcp", String(doc._id), PermissionBits.VIEW);
-		if (granted) visible.push(doc);
+		const registryId = registryIdByName.get(doc.serverName);
+		if (registryId !== undefined && accessibleSkillIds.has(registryId)) {
+			visible.push(doc);
+		}
 	}
 
 	const entries: McpSkillCatalogEntry[] = [];
