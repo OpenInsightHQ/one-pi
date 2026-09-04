@@ -1,3 +1,4 @@
+import { createDecipheriv } from "node:crypto";
 import { parseOpenApiSpec } from "../http-api-skill.js";
 import { findAccessibleResourceIds } from "./acl.js";
 import { hasCredentialsWithRef } from "./credential-service.js";
@@ -56,6 +57,29 @@ export interface McpSkillCatalogEntry {
 // Queries
 // ---------------------------------------------------------------------------
 
+/**
+ * Decrypts arp's `encryptV2` credential format (AES-CBC, `iv:ciphertext`
+ * hex, key = CREDS_KEY env) used for `config.apiKey.key` at rest. Returns
+ * the raw value when it doesn't match the format or CREDS_KEY/decryption
+ * fails, so plaintext keys (e.g. written directly by dmp) pass through.
+ */
+export function decryptArpCredentialValue(raw: string): string {
+	if (!/^[0-9a-f]{32,}:[0-9a-f]+$/i.test(raw)) return raw;
+	const keyHex = process.env.CREDS_KEY;
+	if (!keyHex) return raw;
+	try {
+		const key = Buffer.from(keyHex, "hex");
+		if (![16, 24, 32].includes(key.length)) return raw;
+		const separator = raw.indexOf(":");
+		const iv = Buffer.from(raw.slice(0, separator), "hex");
+		const data = Buffer.from(raw.slice(separator + 1), "hex");
+		const decipher = createDecipheriv(`aes-${key.length * 8}-cbc`, key, iv);
+		return Buffer.concat([decipher.update(data), decipher.final()]).toString("utf8");
+	} catch {
+		return raw;
+	}
+}
+
 /** MCP server URL + static headers extracted from the arp/dmp config blob. */
 export function extractMcpConnection(server: McpServerDoc): {
 	serverUrl: string;
@@ -77,14 +101,15 @@ export function extractMcpConnection(server: McpServerDoc): {
 		| { source?: string; key?: string; authorization_type?: string; custom_header?: string }
 		| undefined;
 	if (apiKey && apiKey.source === "admin" && typeof apiKey.key === "string" && apiKey.key) {
+		const keyValue = decryptArpCredentialValue(apiKey.key);
 		const isCustom = apiKey.authorization_type === "custom";
 		const headerName = isCustom ? apiKey.custom_header || "X-Api-Key" : "Authorization";
 		const value =
 			apiKey.authorization_type === "bearer"
-				? `Bearer ${apiKey.key}`
+				? `Bearer ${keyValue}`
 				: apiKey.authorization_type === "basic"
-					? `Basic ${apiKey.key}`
-					: apiKey.key;
+					? `Basic ${keyValue}`
+					: keyValue;
 		if (!(headerName in headers)) {
 			headers[headerName] = value;
 		}
