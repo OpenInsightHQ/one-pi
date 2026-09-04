@@ -220,6 +220,24 @@ async function resolveMcpToolConfig(
 			headers,
 			buildCredentialHeaders(entry.server.credentialBinding, credentials, entry.server.credentialSchema),
 		);
+	} else {
+		// Credential-less servers may still reference a credential for the arp
+		// user-key ({{MCP_API_KEY}}) mechanism — resolve best-effort.
+		if (entry.server.credentialRef) {
+			credentials = await resolveCredentialsWithRef(userId, "mcp", serverName, entry.server.credentialRef);
+		}
+	}
+	// Replace {{MCP_API_KEY}} placeholders (arp user-key mechanism): use the
+	// first credential value when available, drop the header otherwise.
+	for (const [key, value] of Object.entries(headers)) {
+		if (typeof value === "string" && value.includes("{{MCP_API_KEY}}")) {
+			const credValue = credentials ? Object.values(credentials.values)[0] : undefined;
+			if (credValue) {
+				headers[key] = value.replaceAll("{{MCP_API_KEY}}", credValue);
+			} else {
+				delete headers[key];
+			}
+		}
 	}
 
 	const cacheKey = probeCacheKey(userId, serverName);

@@ -49,7 +49,7 @@ export interface McpSkillCatalogEntry {
 // Queries
 // ---------------------------------------------------------------------------
 
-/** MCP server URL + header config extracted from the arp config blob. */
+/** MCP server URL + static headers extracted from the arp/dmp config blob. */
 export function extractMcpConnection(server: McpServerDoc): {
 	serverUrl: string;
 	headers: Record<string, string>;
@@ -61,6 +61,25 @@ export function extractMcpConnection(server: McpServerDoc): {
 	if (rawHeaders && typeof rawHeaders === "object") {
 		for (const [key, value] of Object.entries(rawHeaders as Record<string, unknown>)) {
 			if (typeof value === "string") headers[key] = value;
+		}
+	}
+	// arp apiKey mechanism (admin-provided key): derive the auth header the
+	// same way arp's transformUserApiKeyConfig does, so arp-managed servers
+	// (e.g. dmp-mcp) authenticate in pi without any credential binding.
+	const apiKey = config.apiKey as
+		| { source?: string; key?: string; authorization_type?: string; custom_header?: string }
+		| undefined;
+	if (apiKey && apiKey.source === "admin" && typeof apiKey.key === "string" && apiKey.key) {
+		const isCustom = apiKey.authorization_type === "custom";
+		const headerName = isCustom ? apiKey.custom_header || "X-Api-Key" : "Authorization";
+		const value =
+			apiKey.authorization_type === "bearer"
+				? `Bearer ${apiKey.key}`
+				: apiKey.authorization_type === "basic"
+					? `Basic ${apiKey.key}`
+					: apiKey.key;
+		if (!(headerName in headers)) {
+			headers[headerName] = value;
 		}
 	}
 	return { serverUrl: url, headers };
